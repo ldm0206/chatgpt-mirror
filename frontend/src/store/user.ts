@@ -14,6 +14,7 @@ const clearAccessibleCookies = () => {
 export const useUserStore = defineStore('user', () => {
   const authenticated = ref(false)
   const isAdmin = ref(false)
+  const isSuperuser = ref(false)
   const username = ref('')
   const csrfToken = ref('')
   let hydrated = false
@@ -72,6 +73,34 @@ export const useUserStore = defineStore('user', () => {
     authenticated.value = Boolean(result.authenticated)
     setUsername(result.username || data.username || '')
     setIsAdmin(Boolean(result.is_admin))
+    isSuperuser.value = Boolean(result.is_superuser)
+    setCsrfToken(result.csrf_token || '')
+    hydrated = true
+
+    return result
+  }
+
+  const setupAdmin = async (data: { password: string; confirm_password: string; turnstile_token?: string }) => {
+    await prepareCsrf()
+    const response = await fetch('/0x/user/setup', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': csrfToken.value
+      },
+      body: JSON.stringify(data)
+    })
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.message || error.detail || '初始化失败')
+    }
+
+    const result = await response.json()
+    authenticated.value = Boolean(result.authenticated)
+    setUsername(result.username || '')
+    setIsAdmin(Boolean(result.is_admin))
+    isSuperuser.value = Boolean(result.is_superuser)
     setCsrfToken(result.csrf_token || '')
     hydrated = true
 
@@ -87,6 +116,7 @@ export const useUserStore = defineStore('user', () => {
       const result = await response.json()
       authenticated.value = Boolean(result.authenticated)
       isAdmin.value = Boolean(result.is_admin)
+      isSuperuser.value = Boolean(result.is_superuser)
       username.value = result.username || ''
       csrfToken.value = result.csrf_token || ''
       return authenticated.value
@@ -107,6 +137,7 @@ export const useUserStore = defineStore('user', () => {
     if (!response.ok) throw new Error('退出未完成，请重试')
     authenticated.value = false
     isAdmin.value = false
+    isSuperuser.value = false
     username.value = ''
     csrfToken.value = ''
     clearAccessibleCookies()
@@ -115,12 +146,14 @@ export const useUserStore = defineStore('user', () => {
   return {
     authenticated,
     isAdmin,
+    isSuperuser,
     username,
     csrfToken,
     setIsAdmin,
     setUsername,
     setCsrfToken,
     login,
+    setupAdmin,
     hydrate,
     logout
   }

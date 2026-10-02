@@ -16,21 +16,21 @@ if __name__ == "__main__":
     from django.contrib.auth.password_validation import validate_password
 
     if not ADMIN_USERNAME:
-        raise Exception("未设置 超级管理员账密")
-    if not ADMIN_PASSWORD:
-        raise Exception("ADMIN_PASSWORD 未设置，请设置后再初始化")
+        raise Exception("未设置 超级管理员用户名")
 
+    if ADMIN_PASSWORD:
+        defaults = {"remark": "超级管理员", "isolated_session": False}
+        user, created = User.objects.get_or_create(username=ADMIN_USERNAME, defaults=defaults)
+        validate_password(ADMIN_PASSWORD, user)
+        user.set_password(ADMIN_PASSWORD)
+        user.is_staff = True
+        user.is_active = True
+        user.is_superuser = True
 
-    defaults = {"remark": "超级管理员", "isolated_session": False}
-    user, created = User.objects.get_or_create(username=ADMIN_USERNAME, defaults=defaults)
-    validate_password(ADMIN_PASSWORD, user)
-    user.set_password(ADMIN_PASSWORD)
-    user.is_staff = True
-    user.is_active = True
-    user.is_superuser = True
-
-    user.save()
-    print("Superuser created.")
+        user.save()
+        print("Superuser created.")
+    else:
+        print("ADMIN_PASSWORD 未设置，跳过管理员初始化；首次访问网页时创建。")
 
     defaults = {
         "remark": "用于免费体验",

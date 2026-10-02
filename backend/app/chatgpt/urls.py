@@ -2,7 +2,7 @@
 from django.urls import path
 
 from app.chatgpt.views.chatgpt import ChatGPTAccountView, ChatGPTLoginView, ChatGPTAccountEnum, ChatGPTTokenExpiryView, \
-    ChatGPTRefreshTokenView, ChatGPTLoginCountResetView
+    ChatGPTRefreshTokenView, ChatGPTLoginCountResetView, ChatGPTBatchProxyView, ChatGPTProxyUsageView, ChatGPTSlotView
 from app.chatgpt.views.gptcar import GptCarView, GptCarEnum, GptCarDetailView, GptCarUserAssignmentView
 from app.chatgpt.views.health import AccountHealthSettingsView
 
@@ -13,6 +13,9 @@ urlpatterns = [
     path("token-expiry", ChatGPTTokenExpiryView.as_view()),
     path("refresh-token", ChatGPTRefreshTokenView.as_view()),
     path("reset-login-count", ChatGPTLoginCountResetView.as_view()),
+    path("batch-proxy", ChatGPTBatchProxyView.as_view()),
+    path("proxy-usage", ChatGPTProxyUsageView.as_view()),
+    path("slot", ChatGPTSlotView.as_view()),
     path("login", ChatGPTLoginView.as_view()),
     path("car", GptCarView.as_view()),
     path("car/<int:car_id>/detail", GptCarDetailView.as_view()),

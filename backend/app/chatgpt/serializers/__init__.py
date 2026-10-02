@@ -106,6 +106,19 @@ class RefreshChatgptTokenSerializer(serializers.Serializer):
 class ResetChatgptLoginCountSerializer(serializers.Serializer):
     id = serializers.IntegerField()
 
+
+class BatchProxyAssignmentSerializer(serializers.Serializer):
+    account_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1), allow_empty=True, max_length=500, default=list
+    )
+    apply_to_all = serializers.BooleanField(default=False)
+    proxy_node_id = serializers.IntegerField(required=False, allow_null=True, min_value=1, default=None)
+
+    def validate(self, attrs):
+        if not attrs["apply_to_all"] and not attrs["account_ids"]:
+            raise serializers.ValidationError({"account_ids": "请选择账号，或选择应用到全部账号"})
+        return attrs
+
 class DeleteChatgptAccountSerializer(serializers.Serializer):
     chatgpt_username = serializers.CharField()
 

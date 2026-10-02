@@ -5,6 +5,7 @@ from datetime import timedelta
 
 import requests
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.middleware.csrf import get_token, rotate_token
 from django.utils import timezone
@@ -12,7 +13,7 @@ from django.utils.dateparse import parse_datetime
 from requests.exceptions import RequestException
 from rest_framework.authtoken.models import Token
 from rest_framework.authtoken.views import ObtainAuthToken
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.response import Response
 from rest_framework.throttling import SimpleRateThrottle
 from rest_framework.views import APIView
@@ -20,12 +21,14 @@ from rest_framework.views import APIView
 from app.accounts.models import User, PendingLogin, VisitorSession
 from app.accounts.authentication import AUTH_COOKIE_NAME, ExpiringCookieTokenAuthentication, clear_auth_cookie, set_auth_cookie
 from app.accounts.session_authority import digest
+from app.accounts.sessions import release as release_slot
+from app.accounts.turnstile import turnstile_settings
 from django.core import signing
 from django.utils.crypto import constant_time_compare
 from app.accounts.serializers import UserRegisterSerializer
 from app.chatgpt.models import ChatgptAccount
 from app.settings import ADMIN_USERNAME, FREE_ACCOUNT_USERNAME
-from app.settings import ALLOW_REGISTER, TURNSTILE_ENABLED, TURNSTILE_SECRET_KEY
+from app.settings import ALLOW_REGISTER
 from app.utils import get_client_ip, get_request_subject, issue_free_session, save_visit_log, req_gateway
 
 
@@ -33,9 +36,43 @@ TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverif
 TURNSTILE_TOKEN_MAX_AGE = timedelta(seconds=300)
 TURNSTILE_CLOCK_SKEW = timedelta(seconds=30)
 
+LOGIN_FAILURE_LIMIT = 10
+LOGIN_FAILURE_WINDOW_SECONDS = 15 * 60
+
+
+class LoginThrottled(APIException):
+    status_code = 429
+    default_code = "login_throttled"
+
+
+def login_failure_key(request):
+    # Coarse per-identity key: the same answer for unknown and known usernames.
+    username = str(request.data.get("username") or "").strip().lower()[:64]
+    identity = f"{get_client_ip(request)}|{username}"
+    return "login-failures:" + hashlib.sha256(identity.encode()).hexdigest()
+
+
+def login_failures_exceeded(request):
+    return cache.get(login_failure_key(request), 0) >= LOGIN_FAILURE_LIMIT
+
+
+def register_login_failure(request):
+    key = login_failure_key(request)
+    try:
+        cache.incr(key)
+    except ValueError:
+        cache.set(key, 1, LOGIN_FAILURE_WINDOW_SECONDS)
+    else:
+        cache.touch(key, LOGIN_FAILURE_WINDOW_SECONDS)
+
+
+def clear_login_failures(request):
+    cache.delete(login_failure_key(request))
+
 
 def verify_turnstile(request, expected_action):
-    if not TURNSTILE_ENABLED:
+    config = turnstile_settings()
+    if not config["enabled"]:
         return timezone.now() + timedelta(seconds=60)
 
     token = str(request.data.get("turnstile_token") or "").strip()
@@ -46,7 +83,7 @@ def verify_turnstile(request, expected_action):
         response = requests.post(
             TURNSTILE_VERIFY_URL,
             data={
-                "secret": TURNSTILE_SECRET_KEY,
+                "secret": config["secret_key"],
                 "response": token,
                 "remoteip": get_client_ip(request),
             },
@@ -136,14 +173,22 @@ class AccountLogin(ObtainAuthToken):
 
     def post(self, request, *args, **kwargs):
         ExpiringCookieTokenAuthentication._enforce_csrf(request)
+        if login_failures_exceeded(request):
+            raise LoginThrottled({"message": "尝试次数过多，请 15 分钟后再试"})
         expires_at = verify_turnstile(request, "login")
         serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except ValidationError:
+            register_login_failure(request)
+            raise
 
         user = serializer.validated_data['user']
         if user.expired_date and user.expired_date <= timezone.now().date():
+            register_login_failure(request)
             raise ValidationError({"message": "账号已过期"})
 
+        clear_login_failures(request)
         return pending_login(request, user, expires_at)
 
 
@@ -182,6 +227,7 @@ class ConfirmLogin(APIView):
             response = Response({
                 "authenticated": True, "username": user.username,
                 "is_admin": user.is_staff or user.is_superuser,
+                "is_superuser": bool(user.is_superuser),
                 "csrf_token": get_token(request),
             })
             set_auth_cookie(response, token)
@@ -220,6 +266,8 @@ class AccountLogout(APIView):
                 subject = user.username
                 token.delete()
                 PendingLogin.objects.filter(user=user).delete()
+        if subject:
+            release_slot(subject)
         from app.accounts.models import GatewayRevocation
         cleanup_pending = bool(subject and GatewayRevocation.objects.filter(subject=subject).exists())
         response = Response({"message": "退出成功", "gateway_cleanup_pending": cleanup_pending})

@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -11,13 +12,24 @@ from rest_framework.authtoken.models import Token
 from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIClient, APIRequestFactory
 
-from app.accounts.authentication import AUTH_COOKIE_NAME
-from app.accounts.models import PendingLogin, User, VisitorSession, GatewayRevocation
+from app.accounts.authentication import AUTH_COOKIE_NAME, ExpiringCookieTokenAuthentication, renew_session
+from app.accounts.models import PendingLogin, SessionAnchor, User, VisitorSession, GatewayRevocation
 from app.accounts.session_authority import authorization_is_active, gateway_authorization, authorization_details, authorization_version
 from app.accounts.views import revoke_user_sessions
-from app.accounts.views.login import LoginIpRateThrottle
+from app.accounts.views.login import (
+    LOGIN_FAILURE_LIMIT, LoginAccountRateThrottle, LoginIpRateThrottle,
+)
 from app.settings import FREE_ACCOUNT_USERNAME
-from app.utils import get_request_subject
+from app.utils import get_request_subject, issue_free_session
+
+
+def turnstile_pair(enabled=True):
+    return {
+        "enabled": enabled,
+        "site_key": "test-site" if enabled else "",
+        "secret_key": "test-secret" if enabled else "",
+        "source": "panel" if enabled else "",
+    }
 
 
 class GatewayLeaseTests(TransactionTestCase):
@@ -130,7 +142,9 @@ class LoginSecurityTests(TestCase):
         cache.clear()
         self.user = User.objects.create_user(username="login-test", password="Strong-password-123!")
         self.client = APIClient(enforce_csrf_checks=True, HTTP_USER_AGENT="login-test")
-        self.turnstile = patch("app.accounts.views.login.TURNSTILE_ENABLED", False)
+        self.turnstile = patch(
+            "app.accounts.views.login.turnstile_settings", return_value=turnstile_pair(False)
+        )
         self.turnstile.start()
         self.addCleanup(self.turnstile.stop)
 
@@ -205,7 +219,7 @@ class LoginSecurityTests(TestCase):
 
     @patch("app.accounts.views.login.requests.post")
     def test_turnstile_failure_and_expiry_never_create_pending_login(self, siteverify):
-        with patch("app.accounts.views.login.TURNSTILE_ENABLED", True):
+        with patch("app.accounts.views.login.turnstile_settings", return_value=turnstile_pair()):
             for result in (
                 {"success": False, "error-codes": ["timeout-or-duplicate"]},
                 {"success": "true", "action": "login", "challenge_ts": timezone.now().isoformat()},
@@ -301,3 +315,153 @@ class LoginSecurityTests(TestCase):
             self.assertTrue(LoginIpRateThrottle().allow_request(first, None))
         self.assertFalse(LoginIpRateThrottle().allow_request(first, None))
         self.assertTrue(LoginIpRateThrottle().allow_request(second, None))
+
+    def throttle_free(self):
+        """The per-minute request throttles answer first; these tests target the 15-minute budget."""
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        for throttle in (LoginIpRateThrottle, LoginAccountRateThrottle):
+            stack.enter_context(patch.object(throttle, "allow_request", return_value=True))
+
+    def failed_login(self):
+        return self.post("/0x/user/login", {
+            "username": self.user.username, "password": "Wrong-password-1!",
+        })
+
+    def test_password_failures_are_limited_to_ten_per_window(self):
+        self.throttle_free()
+        for _ in range(LOGIN_FAILURE_LIMIT):
+            self.assertEqual(self.failed_login().status_code, 400)
+
+        blocked = self.failed_login()
+
+        self.assertEqual(blocked.status_code, 429)
+        self.assertIn("尝试次数过多", str(blocked.data))
+
+    def test_unknown_usernames_share_the_limit_key(self):
+        self.throttle_free()
+        for _ in range(LOGIN_FAILURE_LIMIT):
+            self.assertEqual(self.post("/0x/user/login", {
+                "username": "no-such-user", "password": "Wrong-password-1!",
+            }).status_code, 400)
+
+        self.assertEqual(self.post("/0x/user/login", {
+            "username": "no-such-user", "password": "Wrong-password-1!",
+        }).status_code, 429)
+
+    def test_successful_login_clears_recorded_failures(self):
+        self.throttle_free()
+        for _ in range(3):
+            self.failed_login()
+        self.assertEqual(self.login().status_code, 200)
+
+        for _ in range(LOGIN_FAILURE_LIMIT):
+            self.assertEqual(self.failed_login().status_code, 400)
+
+        self.assertEqual(self.failed_login().status_code, 429)
+
+    def test_expired_account_counts_as_a_failure(self):
+        self.throttle_free()
+        self.user.expired_date = timezone.localdate()
+        self.user.save(update_fields=["expired_date"])
+
+        for _ in range(LOGIN_FAILURE_LIMIT):
+            self.assertEqual(self.failed_login().status_code, 400)
+
+        self.assertEqual(self.failed_login().status_code, 429)
+
+    @patch("app.accounts.views.login.requests.post")
+    def test_turnstile_failures_do_not_consume_the_password_budget(self, siteverify):
+        self.throttle_free()
+        siteverify.return_value.json.return_value = {"success": False}
+        with patch("app.accounts.views.login.turnstile_settings", return_value=turnstile_pair()):
+            for _ in range(12):
+                response = self.post("/0x/user/login", {
+                    "username": self.user.username,
+                    "password": "Strong-password-123!",
+                    "turnstile_token": "test",
+                })
+                self.assertEqual(response.status_code, 400)
+
+        self.assertEqual(self.prepare().status_code, 200)
+
+
+class SessionRenewalTests(TestCase):
+    password = "Strong-password-123!"
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(username="slide-user", password=self.password)
+        self.token = Token.objects.create(user=self.user)
+
+    def age_token(self, seconds):
+        Token.objects.filter(pk=self.token.pk).update(created=timezone.now() - timedelta(seconds=seconds))
+        self.token.refresh_from_db()
+
+    @override_settings(API_TOKEN_TTL_SECONDS=1000, API_TOKEN_MAX_LIFETIME_SECONDS=0)
+    def test_fresh_session_is_not_renewed(self):
+        created = self.token.created
+
+        self.assertIsNone(renew_session(self.token))
+
+        self.assertEqual(Token.objects.get(pk=self.token.pk).created, created)
+        self.assertFalse(SessionAnchor.objects.exists())
+
+    @override_settings(API_TOKEN_TTL_SECONDS=1000, API_TOKEN_MAX_LIFETIME_SECONDS=0)
+    def test_session_past_half_its_lifetime_is_renewed(self):
+        self.age_token(600)
+        stale_created = self.token.created
+
+        deadline = renew_session(self.token)
+
+        renewed = Token.objects.get(pk=self.token.pk).created
+        self.assertGreater(renewed, stale_created)
+        self.assertIsNotNone(deadline)
+        self.assertTrue(SessionAnchor.objects.filter(token_key=self.token.key).exists())
+
+    @override_settings(API_TOKEN_TTL_SECONDS=1000, API_TOKEN_MAX_LIFETIME_SECONDS=2000)
+    def test_renewal_stops_at_the_absolute_session_lifetime(self):
+        self.age_token(600)
+        SessionAnchor.objects.create(
+            token_key=self.token.key, started_at=timezone.now() - timedelta(seconds=2001),
+        )
+        stale_created = self.token.created
+
+        self.assertIsNone(renew_session(self.token))
+
+        self.assertEqual(Token.objects.get(pk=self.token.pk).created, stale_created)
+
+    @override_settings(API_TOKEN_TTL_SECONDS=1000, API_TOKEN_SLIDING_RENEWAL=False,
+                       API_TOKEN_MAX_LIFETIME_SECONDS=0)
+    def test_renewal_can_be_switched_off(self):
+        self.age_token(600)
+        stale_created = self.token.created
+
+        self.assertIsNone(renew_session(self.token))
+
+        self.assertEqual(Token.objects.get(pk=self.token.pk).created, stale_created)
+
+    @override_settings(API_TOKEN_TTL_SECONDS=1000, API_TOKEN_MAX_LIFETIME_SECONDS=0)
+    def test_authentication_slides_an_aged_session(self):
+        self.age_token(600)
+        request = APIRequestFactory().get("/0x/user/me", HTTP_AUTHORIZATION=f"Token {self.token.key}")
+
+        user, token = ExpiringCookieTokenAuthentication().authenticate(request)
+
+        self.assertEqual(user, self.user)
+        self.assertGreater(Token.objects.get(pk=token.pk).created, token.created - timedelta(seconds=1))
+
+    @override_settings(API_TOKEN_TTL_SECONDS=1000, API_TOKEN_MAX_LIFETIME_SECONDS=0)
+    def test_free_account_token_never_slides(self):
+        free = User.objects.create_user(username=FREE_ACCOUNT_USERNAME, password=self.password)
+        cookie = issue_free_session()
+        token = Token.objects.create(user=free)
+        Token.objects.filter(pk=token.pk).update(created=timezone.now() - timedelta(seconds=600))
+        request = APIRequestFactory().get("/0x/user/me", HTTP_AUTHORIZATION=f"Token {token.key}")
+        request.COOKIES["free_session"] = cookie
+        stale_created = Token.objects.get(pk=token.pk).created
+
+        user, _ = ExpiringCookieTokenAuthentication().authenticate(request)
+
+        self.assertEqual(user, free)
+        self.assertEqual(Token.objects.get(pk=token.pk).created, stale_created)

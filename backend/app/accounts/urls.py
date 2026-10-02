@@ -9,12 +9,19 @@ from app.accounts.views import UserCapabilityPolicyView, UserModelPolicyView
 from app.accounts.views.login import AccountLogin, AccountLogout, UserFreeLoginView, AccountRegister, ConfirmLogin
 from app.accounts.session_authority import GatewayAuthorizationView
 from app.accounts.views.cfg import VersionConfig, AccessControlView, PoliticalModerationConfigView, PoliticalModerationTestView
+from app.accounts.views.cfg import TurnstileSettingsView, EgressReportView
 from app.accounts.views.backup import UnifiedBackupView
 from app.accounts.views.announcements import AnnouncementAdminView, CurrentAnnouncementView
+from app.accounts.views.setup import AdminSetupStatusView, AdminSetupView
+from app.accounts.views.sessions import SessionLimitsView, SessionOccupancyView, SessionReleaseView
+from app.accounts.views.oidc import OidcCallbackView, OidcLoginView, OidcSettingsView
 
 urlpatterns = [
     path("", UserAccountView.as_view()),
     path("version-cfg", VersionConfig.as_view()),
+    path("setup-status", AdminSetupStatusView.as_view()),
+    path("setup", AdminSetupView.as_view()),
+    path("turnstile-config", TurnstileSettingsView.as_view()),
     path("get-mirror-token", GetMirrorToken.as_view()),
     path("register", AccountRegister.as_view()),
     path("login-free", UserFreeLoginView.as_view()),
@@ -26,12 +33,16 @@ urlpatterns = [
     path("relat-gptcar", UserRelateGPTCarView.as_view()),
     path("login", AccountLogin.as_view()),
     path("login-confirm", ConfirmLogin.as_view()),
+    path("oidc/login", OidcLoginView.as_view()),
+    path("oidc/callback", OidcCallbackView.as_view()),
+    path("oidc-config", OidcSettingsView.as_view()),
     path("gateway-authorization", GatewayAuthorizationView.as_view()),
     path("logout", AccountLogout.as_view()),
     path("visit-log", VisitLogView.as_view()),
     path("access-control", AccessControlView.as_view()),
     path("political-moderation", PoliticalModerationConfigView.as_view()),
     path("political-moderation/test", PoliticalModerationTestView.as_view()),
+    path("egress-report", EgressReportView.as_view()),
     path("me", CurrentUserView.as_view()),
     path("change-password", ChangePasswordView.as_view()),
     path("conversation-title-privacy", ConversationTitlePrivacyView.as_view()),
@@ -39,6 +50,9 @@ urlpatterns = [
     path("quota", QuotaView.as_view()),
     path("overview", OperationsOverviewView.as_view()),
     path("revoke-sessions", UserSessionRevokeView.as_view()),
+    path("sessions", SessionOccupancyView.as_view()),
+    path("sessions/release", SessionReleaseView.as_view()),
+    path("sessions/limits", SessionLimitsView.as_view()),
     path("<int:user_id>/mcp-skills", UserCapabilityPolicyView.as_view()),
     path("<int:user_id>/model-policy", UserModelPolicyView.as_view()),
     path("batch", BatchUserActionView.as_view()),

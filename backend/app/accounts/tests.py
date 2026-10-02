@@ -44,6 +44,19 @@ from app.settings import ADMIN_USERNAME, FREE_ACCOUNT_USERNAME
 from app.utils import get_client_ip, req_gateway
 
 
+def turnstile_patch(enabled=True):
+    """Patch the resolved Turnstile pair (panel or environment) the login flow reads."""
+    return patch(
+        "app.accounts.views.login.turnstile_settings",
+        new=lambda: {
+            "enabled": enabled,
+            "site_key": "test-site" if enabled else "",
+            "secret_key": "test-secret" if enabled else "",
+            "source": "panel" if enabled else "",
+        },
+    )
+
+
 class UnifiedBackupValidationTests(TestCase):
     def _gateway_backup(self):
         return {
@@ -422,7 +435,7 @@ class SecurityRegressionTests(TestCase):
         self.assertEqual(response.status_code, 400)
 
     @override_settings(CSRF_TRUSTED_ORIGINS=["https://mirror.example"])
-    @patch("app.accounts.views.login.TURNSTILE_ENABLED", False)
+    @turnstile_patch(False)
     def test_admin_login_issues_csrf_cookie_for_unsafe_api_requests(self):
         User.objects.create_superuser(username="csrf-admin", password="Strong-password-123!")
         client = APIClient(enforce_csrf_checks=True)
@@ -480,7 +493,7 @@ class SecurityRegressionTests(TestCase):
         self.assertEqual(untrusted.status_code, 403)
 
     @override_settings(DJANGO_ALLOW_ALL_ORIGINS=True, ALLOWED_HOSTS=["*"])
-    @patch("app.accounts.views.login.TURNSTILE_ENABLED", False)
+    @turnstile_patch(False)
     def test_allow_all_origins_accepts_unlisted_origin_with_csrf_token(self):
         User.objects.create_superuser(username="open-origin-admin", password="Strong-password-123!")
         client = APIClient(enforce_csrf_checks=True)
@@ -554,7 +567,7 @@ class SecurityRegressionTests(TestCase):
 
     @patch("app.accounts.views.login.req_gateway")
     @patch("app.accounts.views.login.ALLOW_REGISTER", True)
-    @patch("app.accounts.views.login.TURNSTILE_ENABLED", False)
+    @turnstile_patch(False)
     def test_registration_conflict_is_checked_before_upstream_write(self, req_gateway):
         User.objects.create_user(username="existing-user", password="Strong-password-123!")
         request = self.factory.post(
@@ -771,8 +784,7 @@ class SecurityRegressionTests(TestCase):
             VisitLog.objects.filter(username=ADMIN_USERNAME, log_type="login").exists()
         )
 
-    @patch("app.accounts.views.login.TURNSTILE_SECRET_KEY", "test-secret")
-    @patch("app.accounts.views.login.TURNSTILE_ENABLED", True)
+    @turnstile_patch()
     @patch("app.accounts.views.login.requests.post")
     def test_turnstile_validation_checks_action(self, post):
         post.return_value.json.return_value = {
@@ -795,8 +807,7 @@ class SecurityRegressionTests(TestCase):
         self.assertEqual(post.call_args.kwargs["data"]["secret"], "test-secret")
         self.assertEqual(post.call_args.kwargs["data"]["response"], "test-token")
 
-    @patch("app.accounts.views.login.TURNSTILE_SECRET_KEY", "test-secret")
-    @patch("app.accounts.views.login.TURNSTILE_ENABLED", True)
+    @turnstile_patch()
     @patch("app.accounts.views.login.requests.post")
     def test_turnstile_rejects_wrong_action(self, post):
         post.return_value.json.return_value = {
@@ -813,8 +824,7 @@ class SecurityRegressionTests(TestCase):
         with self.assertRaises(ValidationError):
             verify_turnstile(request, "login")
 
-    @patch("app.accounts.views.login.TURNSTILE_SECRET_KEY", "test-secret")
-    @patch("app.accounts.views.login.TURNSTILE_ENABLED", True)
+    @turnstile_patch()
     @patch("app.accounts.views.login.requests.post")
     def test_turnstile_rejects_expired_token(self, post):
         post.return_value.json.return_value = {
@@ -833,8 +843,7 @@ class SecurityRegressionTests(TestCase):
         with self.assertRaises(ValidationError):
             verify_turnstile(request, "login")
 
-    @patch("app.accounts.views.login.TURNSTILE_SECRET_KEY", "test-secret")
-    @patch("app.accounts.views.login.TURNSTILE_ENABLED", True)
+    @turnstile_patch()
     @patch("app.accounts.views.login.requests.post")
     def test_turnstile_requires_boolean_success(self, post):
         post.return_value.json.return_value = {

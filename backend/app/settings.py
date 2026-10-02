@@ -177,7 +177,6 @@ INSTALLED_APPS = [
     "rest_framework.authtoken",
     "app.accounts",
     "app.chatgpt",
-    "django_crontab",
 ]
 
 # django simpleui
@@ -216,12 +215,23 @@ REST_FRAMEWORK = {
         "login_confirm": "20/min",
         "login_bootstrap": "60/min",
         "login_account": "10/min",
+        "oidc_login": "20/min",
+        "oidc_callback": "20/min",
+        "admin_setup": "10/min",
         "expensive_user": "30/min",
         "user": "120/min",
     },
 }
 
 API_TOKEN_TTL_SECONDS = int(os.environ.get("API_TOKEN_TTL_SECONDS", str(7 * 24 * 60 * 60)))
+API_TOKEN_SLIDING_RENEWAL = env_bool("API_TOKEN_SLIDING_RENEWAL", True)
+API_TOKEN_MAX_LIFETIME_SECONDS = int(
+    os.environ.get("API_TOKEN_MAX_LIFETIME_SECONDS", str(30 * 24 * 60 * 60))
+)
+if API_TOKEN_TTL_SECONDS <= 0:
+    raise RuntimeError("API_TOKEN_TTL_SECONDS must be greater than zero")
+if API_TOKEN_MAX_LIFETIME_SECONDS and API_TOKEN_MAX_LIFETIME_SECONDS < API_TOKEN_TTL_SECONDS:
+    raise RuntimeError("API_TOKEN_MAX_LIFETIME_SECONDS must be 0 or at least API_TOKEN_TTL_SECONDS")
 GATEWAY_CONNECT_TIMEOUT_SECONDS = float(os.environ.get("GATEWAY_CONNECT_TIMEOUT_SECONDS", "5"))
 GATEWAY_READ_TIMEOUT_SECONDS = float(os.environ.get("GATEWAY_READ_TIMEOUT_SECONDS", "60"))
 if GATEWAY_CONNECT_TIMEOUT_SECONDS <= 0 or GATEWAY_READ_TIMEOUT_SECONDS <= 0:

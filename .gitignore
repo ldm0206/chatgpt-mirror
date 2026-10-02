@@ -64,3 +64,7 @@ coverage/
 *.tmp
 *.bak
 
+# Local dev stack artifacts
+dev_logs/
+/backend/dev_mock_state.json
+

@@ -2,7 +2,7 @@ import time
 
 import jwt
 from django.db import transaction
-from django.db.models import F
+from django.db.models import Count, F
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
@@ -11,11 +11,12 @@ from rest_framework.views import APIView
 from app.chatgpt.models import ChatgptAccount, ChatgptCar
 from app.chatgpt.serializers import ShowChatgptTokenSerializer, AddChatgptTokenSerializer, ChatGPTLoginSerializer, \
     UpdateChatgptInfoSerializer, DeleteChatgptAccountSerializer, CheckChatgptTokenExpirySerializer, \
-    RefreshChatgptTokenSerializer, ResetChatgptLoginCountSerializer
+    RefreshChatgptTokenSerializer, ResetChatgptLoginCountSerializer, BatchProxyAssignmentSerializer
 from app.page import DefaultPageNumberPagination
 from app.settings import CHATGPT_GATEWAY_URL
 from app.utils import get_request_subject, save_visit_log, req_gateway
-from app.accounts.models import User
+from app.accounts.models import SessionSlot, User
+from app.accounts.sessions import admit, queue_position, release, slot_state
 from app.accounts.session_authority import gateway_authorization, capability_aliases, account_model_policy
 from rest_framework.exceptions import ValidationError
 
@@ -230,6 +231,18 @@ class ChatGPTLoginView(APIView):
             raise ValidationError("该账号当前不支持 Web 模式，请联系管理员更新 SessionToken")
 
         user_name = get_request_subject(request)
+        # 管理员不占座，避免把自己锁在并发上限之外。
+        if not (request.user.is_staff or request.user.is_superuser):
+            slot = admit(user_name, request.user, chatgpt)
+            if slot.state != SessionSlot.STATE_ACTIVE:
+                return Response({
+                    "queued": True,
+                    "position": queue_position(slot),
+                    "queue_size": SessionSlot.objects.filter(state=SessionSlot.STATE_WAITING).count(),
+                    "chatgpt_flag": "{:03}{}".format(chatgpt.id, chatgpt.chatgpt_username[:3]),
+                    "message": "当前使用人数已达上限，已为你排队，轮到后会自动进入",
+                })
+
         payload = {
             "user_name": user_name,
             "authorization": gateway_authorization(request),
@@ -271,3 +284,50 @@ class ChatGPTLoginCountResetView(APIView):
         if not updated:
             raise ValidationError("账号不存在")
         return Response({"message": "被登录次数已重置"})
+
+
+class ChatGPTBatchProxyView(APIView):
+    permission_classes = (IsAuthenticated, IsAdminUser)
+
+    def post(self, request):
+        serializer = BatchProxyAssignmentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        queryset = ChatgptAccount.objects.all()
+        if not data["apply_to_all"]:
+            queryset = queryset.filter(id__in=data["account_ids"])
+        updated = queryset.update(proxy_node_id=data["proxy_node_id"])
+        return Response({"message": f"已更新 {updated} 个账号的代理节点", "updated": updated})
+
+
+class ChatGPTSlotView(APIView):
+    """Whether this session holds a seat, or how far it still has to wait."""
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        return Response(slot_state(get_request_subject(request)))
+
+    def post(self, request):
+        if request.data.get("action") != "leave":
+            raise ValidationError({"action": "未知操作"})
+        release(get_request_subject(request))
+        return Response({"message": "已释放会话名额", **slot_state(get_request_subject(request))})
+
+
+class ChatGPTProxyUsageView(APIView):
+    """Node usage across all accounts, so the console can rank the frequently used ones."""
+
+    permission_classes = (IsAuthenticated, IsAdminUser)
+
+    def get(self, request):
+        usage = {
+            str(row["proxy_node_id"]): row["total"]
+            for row in ChatgptAccount.objects.exclude(proxy_node_id__isnull=True)
+            .values("proxy_node_id").annotate(total=Count("id"))
+        }
+        return Response({
+            "usage": usage,
+            "unassigned": ChatgptAccount.objects.filter(proxy_node_id__isnull=True).count(),
+        })

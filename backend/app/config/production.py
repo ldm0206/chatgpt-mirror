@@ -13,7 +13,8 @@ def required_env(key: str) -> str:
 
 
 ADMIN_USERNAME = required_env("ADMIN_USERNAME")
-ADMIN_PASSWORD = required_env("ADMIN_PASSWORD")
+# 留空则跳过启动时初始化，改由首次访问网页的向导创建管理员。
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "").strip()
 GATEWAY_ADMIN_SECRET = required_env("GATEWAY_ADMIN_SECRET")
 CHATGPT_GATEWAY_URL = required_env("CHATGPT_GATEWAY_URL")
 ALLOW_REGISTER = os.environ.get("ALLOW_REGISTER", "false") == "true"
@@ -31,10 +32,16 @@ if TURNSTILE_ENABLED and (not TURNSTILE_SITE_KEY or not TURNSTILE_SECRET_KEY):
         "must be set when CLOUDFLARE_TURNSTILE=enable"
     )
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-log_file_path = os.path.join(BASE_DIR, os.pardir, 'logs/cron.log > /dev/null 2>&1')
+# OIDC 单点登录：三要素齐全即启用，面板里保存的值优先于这里。
+OIDC_ISSUER = os.environ.get("OIDC_ISSUER", "").strip()
+OIDC_CLIENT_ID = os.environ.get("OIDC_CLIENT_ID", "").strip()
+OIDC_CLIENT_SECRET = os.environ.get("OIDC_CLIENT_SECRET", "").strip()
+OIDC_SCOPES = os.environ.get("OIDC_SCOPES", "openid profile email").strip()
+OIDC_DISPLAY_NAME = os.environ.get("OIDC_DISPLAY_NAME", "SSO").strip()
+OIDC_REDIRECT_URI = os.environ.get("OIDC_REDIRECT_URI", "").strip()
+OIDC_AUTO_PROVISION = os.environ.get("OIDC_AUTO_PROVISION", "true") == "true"
+OIDC_AUTO_LINK_USERNAME = os.environ.get("OIDC_AUTO_LINK_USERNAME", "true") == "true"
+OIDC_LINK_ADMINS = os.environ.get("OIDC_LINK_ADMINS", "false") == "true"
+OIDC_USERNAME_CLAIM = os.environ.get("OIDC_USERNAME_CLAIM", "preferred_username").strip()
 
-CRONJOBS = [
-    ('*/5 * * * *', 'app.cron.check_access_token', f'>> {log_file_path}'),
-    ('*/5 * * * *', 'app.cron.update_access_token', f'>> {log_file_path}'),
-]
+BASE_DIR = Path(__file__).resolve().parent.parent

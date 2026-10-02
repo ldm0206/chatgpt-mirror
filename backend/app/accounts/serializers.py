@@ -1,10 +1,13 @@
+import re
+from urllib.parse import urlsplit
+
 from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.accounts.models import Announcement, User, VisitLog
+from app.accounts.models import Announcement, SiteSettings, User, VisitLog
 from app.chatgpt.models import ChatgptAccount
 from app.settings import ADMIN_USERNAME
 
@@ -167,6 +170,174 @@ class UserRegisterSerializer(serializers.Serializer):
         except DjangoValidationError as exc:
             raise serializers.ValidationError(list(exc.messages))
         return value
+
+
+class AdminSetupSerializer(serializers.Serializer):
+    # The administrator name is fixed by ADMIN_USERNAME: user management, log protection
+    # and account registration all key off it, so the wizard must not invent another one.
+    password = serializers.CharField()
+    confirm_password = serializers.CharField()
+
+    def validate(self, attrs):
+        if attrs["password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError({"confirm_password": "两次输入的密码不一致"})
+        try:
+            validate_password(attrs["password"], User(username=ADMIN_USERNAME))
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"password": list(exc.messages)})
+        return attrs
+
+
+class TurnstileSettingsSerializer(serializers.ModelSerializer):
+    turnstile_secret_key = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, max_length=256, trim_whitespace=False
+    )
+    secret_configured = serializers.SerializerMethodField()
+    revision = serializers.IntegerField(min_value=0)
+
+    class Meta:
+        model = SiteSettings
+        fields = ("turnstile_site_key", "turnstile_secret_key", "secret_configured", "revision")
+
+    def get_secret_configured(self, obj):
+        return bool(obj.turnstile_secret_key)
+
+    @staticmethod
+    def _clean(value, label):
+        value = value.strip()
+        if len(value) > 256 or any(char.isspace() for char in value):
+            raise serializers.ValidationError(f"{label}格式无效")
+        return value
+
+    def validate_turnstile_site_key(self, value):
+        return self._clean(value, "站点密钥")
+
+    def validate_turnstile_secret_key(self, value):
+        if value.startswith("enc:v1:"):
+            raise serializers.ValidationError("请填写原始密钥")
+        return self._clean(value, "密钥")
+
+    def validate(self, attrs):
+        site_key = attrs.get("turnstile_site_key", self.instance.turnstile_site_key or "").strip()
+        secret_key = attrs.get("turnstile_secret_key") or self.instance.turnstile_secret_key or ""
+        if site_key and not secret_key:
+            raise serializers.ValidationError({"turnstile_secret_key": "填写站点密钥后需同时填写密钥"})
+        if not site_key:
+            # Clearing the site key hands the pair back to the environment.
+            attrs["turnstile_secret_key"] = ""
+        return attrs
+
+
+class OidcSettingsSerializer(serializers.ModelSerializer):
+    oidc_client_secret = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, max_length=512, trim_whitespace=False
+    )
+    secret_configured = serializers.SerializerMethodField()
+    revision = serializers.IntegerField(min_value=0)
+
+    SCOPE_PATTERN = re.compile(r"^[A-Za-z0-9._:-]+$")
+    CLAIM_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+
+    class Meta:
+        model = SiteSettings
+        fields = (
+            "oidc_issuer",
+            "oidc_client_id",
+            "oidc_client_secret",
+            "oidc_scopes",
+            "oidc_display_name",
+            "oidc_redirect_uri",
+            "oidc_auto_provision",
+            "oidc_auto_link_by_username",
+            "oidc_link_admins",
+            "oidc_username_claim",
+            "secret_configured",
+            "revision",
+        )
+
+    def get_secret_configured(self, obj):
+        return bool(obj.oidc_client_secret)
+
+    @staticmethod
+    def _no_whitespace(value, label):
+        value = value.strip()
+        if any(char.isspace() for char in value):
+            raise serializers.ValidationError(f"{label}不能包含空白字符")
+        return value
+
+    @staticmethod
+    def _absolute_url(value, label):
+        parts = urlsplit(value)
+        if parts.scheme not in ("http", "https") or not parts.netloc or parts.query or parts.fragment:
+            raise serializers.ValidationError(f"{label}必须是绝对 http(s) 地址")
+        return value
+
+    def validate_oidc_issuer(self, value):
+        value = self._no_whitespace(value, "Issuer")
+        if not value:
+            return ""
+        return self._absolute_url(value, "Issuer").rstrip("/")
+
+    def validate_oidc_client_id(self, value):
+        return self._no_whitespace(value, "Client ID")
+
+    def validate_oidc_client_secret(self, value):
+        if value.startswith("enc:v1:"):
+            raise serializers.ValidationError("请填写原始密钥")
+        return self._no_whitespace(value, "密钥") if value else value
+
+    def validate_oidc_scopes(self, value):
+        scopes = value.split()
+        if not scopes:
+            return "openid profile email"
+        if "openid" not in scopes:
+            raise serializers.ValidationError("scope 必须包含 openid")
+        if len(scopes) > 12 or len(" ".join(scopes)) > 256:
+            raise serializers.ValidationError("scope 数量超出限制")
+        for scope in scopes:
+            if not self.SCOPE_PATTERN.match(scope):
+                raise serializers.ValidationError(f"scope {scope} 含非法字符")
+        return " ".join(scopes)
+
+    def validate_oidc_display_name(self, value):
+        value = value.strip()
+        if any(char in value for char in "\r\n"):
+            raise serializers.ValidationError("显示名称不能包含换行")
+        return value or "SSO"
+
+    def validate_oidc_redirect_uri(self, value):
+        value = self._no_whitespace(value, "回调地址")
+        if not value:
+            return ""
+        return self._absolute_url(value, "回调地址")
+
+    def validate_oidc_username_claim(self, value):
+        value = value.strip() or "preferred_username"
+        if not self.CLAIM_PATTERN.match(value):
+            raise serializers.ValidationError("声明名只能包含字母、数字和 . _ : -")
+        return value
+
+    def validate(self, attrs):
+        instance = self.instance
+
+        def current(field):
+            return getattr(instance, field, "") if instance else ""
+
+        issuer = attrs.get("oidc_issuer", current("oidc_issuer")).strip()
+        client_id = attrs.get("oidc_client_id", current("oidc_client_id")).strip()
+        secret = attrs.get("oidc_client_secret") or current("oidc_client_secret")
+
+        if not issuer:
+            # Clearing the issuer hands the provider back to the environment.
+            attrs.update({
+                "oidc_issuer": "", "oidc_client_id": "", "oidc_client_secret": "", "oidc_redirect_uri": "",
+            })
+            return attrs
+        if not client_id:
+            raise serializers.ValidationError({"oidc_client_id": "填写 Issuer 后需同时填写 Client ID"})
+        if not secret:
+            raise serializers.ValidationError({"oidc_client_secret": "填写 Issuer 后需同时填写密钥"})
+        return attrs
 
 
 class ChangePasswordSerializer(serializers.Serializer):

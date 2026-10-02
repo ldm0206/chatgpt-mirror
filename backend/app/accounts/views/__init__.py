@@ -9,7 +9,8 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from app.accounts.models import User, VisitLog, PendingLogin, VisitorSession
+from app.accounts.models import User, VisitLog, PendingLogin, SessionSlot, VisitorSession
+from app.accounts.sessions import promote_waiting
 from app.accounts.session_authority import (
     gateway_authorization, capability_aliases, account_model_policies_by_username,
 )
@@ -31,6 +32,9 @@ def revoke_user_sessions(user, *, require_gateway=False):
     Token.objects.filter(user=user).delete()
     PendingLogin.objects.filter(user=user).delete()
     VisitorSession.objects.filter(user=user).delete()
+    released, _ = SessionSlot.objects.filter(user=user).delete()
+    if released:
+        promote_waiting()
     from app.accounts.models import GatewayRevocation
     if require_gateway and GatewayRevocation.objects.filter(subject=user.username).exists():
         raise ValidationError("会话已在管理端撤销，网关通知正在自动重试；旧授权最迟在 60 分钟内失效")
@@ -615,6 +619,7 @@ class CurrentUserView(APIView):
             "authenticated": True,
             "username": request.user.username,
             "is_admin": bool(request.user.is_staff or request.user.is_superuser),
+            "is_superuser": bool(request.user.is_superuser),
             "allow_admin_view_conversation_titles": request.user.allow_admin_view_conversation_titles,
             "quota": quota_snapshot(request.user),
             "csrf_token": get_token(request),

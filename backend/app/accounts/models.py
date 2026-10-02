@@ -4,6 +4,7 @@ from django.db import models, transaction
 from django.db.models import Q
 from django.utils import timezone
 from app.chatgpt.models import ChatgptAccount
+from app.fields import EncryptedTextField
 
 
 class User(AbstractUser):
@@ -36,10 +37,67 @@ class User(AbstractUser):
     )
 
 
+class SiteSettings(models.Model):
+    # One installation-wide row. Empty Turnstile keys hand the pair back to the environment.
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    turnstile_site_key = models.CharField(max_length=256, blank=True, default="")
+    turnstile_secret_key = EncryptedTextField(blank=True, default="")
+    # Empty OIDC triple likewise hands the provider back to the environment.
+    oidc_issuer = models.CharField(max_length=255, blank=True, default="")
+    oidc_client_id = models.CharField(max_length=256, blank=True, default="")
+    oidc_client_secret = EncryptedTextField(blank=True, default="")
+    oidc_scopes = models.CharField(max_length=256, default="openid profile email")
+    oidc_display_name = models.CharField(max_length=32, default="SSO")
+    oidc_redirect_uri = models.CharField(max_length=300, blank=True, default="")
+    oidc_auto_provision = models.BooleanField(default=True)
+    oidc_auto_link_by_username = models.BooleanField(default=True)
+    oidc_link_admins = models.BooleanField(default=False)
+    oidc_username_claim = models.CharField(max_length=64, default="preferred_username")
+    # 0 keeps the installation unlimited, which is the behaviour before these existed.
+    max_active_sessions = models.PositiveIntegerField(default=0)
+    max_sessions_per_account = models.PositiveIntegerField(default=0)
+    session_idle_seconds = models.PositiveIntegerField(default=1800)
+    revision = models.PositiveIntegerField(default=0)
+    updated_time = models.DateTimeField(auto_now=True)
+
+
+class SessionSlot(models.Model):
+    """One seat per active mirror session, plus the queue of sessions waiting for one.
+
+    A seat is taken when a member enters an upstream account, because that is the only
+    moment the mirror can observe. Idle seats are reclaimed and the queue advances.
+    """
+
+    STATE_ACTIVE = "active"
+    STATE_WAITING = "waiting"
+    STATE_CHOICES = ((STATE_ACTIVE, "使用中"), (STATE_WAITING, "排队中"))
+
+    subject = models.CharField(max_length=200, unique=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="session_slots")
+    chatgpt_account = models.ForeignKey(
+        ChatgptAccount, null=True, blank=True, on_delete=models.SET_NULL, related_name="session_slots",
+    )
+    state = models.CharField(max_length=16, choices=STATE_CHOICES, default=STATE_WAITING)
+    queued_at = models.DateTimeField(default=timezone.now)
+    acquired_at = models.DateTimeField(null=True, blank=True)
+    last_seen_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ("queued_at", "id")
+        indexes = (models.Index(fields=("state", "queued_at"), name="slot_state_queue_idx"),)
+
+
 class VisitorSession(models.Model):
     sid = models.CharField(max_length=32, primary_key=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     expires_at = models.DateTimeField(db_index=True)
+
+
+class SessionAnchor(models.Model):
+    # Sliding renewal rewrites Token.created, so the original start is kept here to
+    # keep a hard ceiling on how long one session can live. Rows are swept nightly.
+    token_key = models.CharField(max_length=40, primary_key=True)
+    started_at = models.DateTimeField()
 
 
 class GatewayRevocation(models.Model):
@@ -52,6 +110,26 @@ class GatewayRevocation(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=("subject", "version"), name="unique_gateway_revocation")]
+
+
+class OidcIdentity(models.Model):
+    """One external OIDC subject bound to a mirror user.
+
+    The subject is the only stable identifier the provider guarantees, so the binding
+    is keyed on (issuer, subject) and survives username changes on either side.
+    """
+
+    issuer = models.CharField(max_length=255)
+    subject = models.CharField(max_length=255)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="oidc_identities")
+    username = models.CharField(max_length=150, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_login_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("issuer", "subject"), name="unique_oidc_identity"),
+        ]
 
 
 class PendingLogin(models.Model):

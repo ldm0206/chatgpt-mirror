@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>外联泄漏防护 · 本地演示</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #f6f7f9; color: #1f2933; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 28px 20px 60px; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  .sub { color: #52606d; font-size: 14px; line-height: 1.7; margin: 0 0 18px; }
+  .sub code { background: #eceff1; padding: 1px 5px; border-radius: 4px; }
+  .panel { background: #fff; border: 1px solid #e4e7eb; border-radius: 10px; padding: 16px 18px; margin-bottom: 14px; }
+  .btns { display: flex; flex-wrap: wrap; gap: 10px; }
+  button { cursor: pointer; border: 1px solid #cbd2d9; background: #fff; border-radius: 8px; padding: 8px 14px; font-size: 13px; }
+  button:hover { border-color: #4096ff; color: #1677ff; }
+  button.block { border-color: #ffccc7; color: #cf1322; }
+  button.allow { border-color: #b7eb8f; color: #389e0d; }
+  #log { background: #0b1021; color: #d6e2ff; font-size: 12.5px; line-height: 1.65; border-radius: 10px; padding: 14px 16px; min-height: 180px; white-space: pre-wrap; word-break: break-all; margin: 0; }
+  .t-block { color: #ff9f6e; } .t-allow { color: #8ce99a; } .t-info { color: #74c0fc; } .t-dim { color: #8b97b8; }
+</style>
+<script>
+(function () {
+  'use strict';
+  if (window.__MIRROR_EGRESS_GUARD__) { return; }
+  window.__MIRROR_EGRESS_GUARD__ = true;
+
+  // 镜像页面外联泄漏防护：除镜像自身与下方白名单外，拦截一切跨源请求，
+  // 防止未被网关重写的官方/遥测端点（arkose、sentry、statsig、cdn.oaistatic.com 等）
+  // 从用户浏览器直连并暴露真实 IP 与设备指纹。拦截结果聚合上报到访问日志。
+  var BUILTIN_HOSTS = ['challenges.cloudflare.com'];
+  var EXTRA_HOSTS = ["cdn.example.com"];
+  var REPORT_URL = '/0x/user/egress-report';
+  var MAX_PENDING = 100;
+  var FLUSH_MS = 3000;
+
+  var allowHosts = {};
+  BUILTIN_HOSTS.concat(EXTRA_HOSTS || []).forEach(function (host) {
+    host = String(host || '').toLowerCase().replace(/^\*\./, '');
+    if (host) { allowHosts[host] = true; }
+  });
+
+  function isAllowedUrl(url) {
+    try {
+      url = String(url == null ? '' : url).trim();
+      if (!url || url.charAt(0) === '#') { return true; }
+      if (/^(data|blob|about|javascript|mailto|tel|sms):/i.test(url)) { return true; }
+      var parsed = new URL(url, location.href);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:' ||
+          parsed.protocol === 'ws:' || parsed.protocol === 'wss:') {
+        return parsed.host === location.host || allowHosts[parsed.hostname.toLowerCase()] === true;
+      }
+      return false;
+    } catch (error) {
+      return true;
+    }
+  }
+
+  var warned = {};
+  var pending = {};
+  var pendingCount = 0;
+  var flushTimer = null;
+
+  function report(url, kind) {
+    try {
+      url = String(url == null ? '' : url);
+      if (url.length > 500) { url = url.slice(0, 500); }
+      if (!warned[url]) {
+        warned[url] = true;
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('[egress-guard] 已拦截 ' + (kind || '请求') + ': ' + url);
+        }
+      }
+      if (pending[url] === undefined) {
+        if (pendingCount >= MAX_PENDING) { return; }
+        pendingCount += 1;
+        pending[url] = 0;
+      }
+      pending[url] += 1;
+      scheduleFlush();
+    } catch (error) { /* 拦截上报绝不破坏页面 */ }
+  }
+
+  function csrfToken() {
+    try {
+      var match = document.cookie.match(/(?:^|; )csrftoken=([^;]*)/);
+      return match ? decodeURIComponent(match[1]) : '';
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function flushNow() {
+    var events = [];
+    for (var url in pending) {
+      if (Object.prototype.hasOwnProperty.call(pending, url)) {
+        events.push({ url: url, count: pending[url] });
+      }
+    }
+    pending = {};
+    pendingCount = 0;
+    if (!events.length || !nativeFetch) { return; }
+    try {
+      nativeFetch(REPORT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() },
+        body: JSON.stringify({ events: events }),
+        keepalive: true,
+        credentials: 'same-origin',
+      }).catch(function () { });
+    } catch (error) { }
+  }
+
+  function scheduleFlush() {
+    if (flushTimer !== null) { return; }
+    flushTimer = setTimeout(function () {
+      flushTimer = null;
+      flushNow();
+    }, FLUSH_MS);
+  }
+
+  var nativeFetch = window.fetch ? window.fetch.bind(window) : null;
+  if (nativeFetch) {
+    window.fetch = function (input, init) {
+      var url = input && typeof input !== 'string' ? input.url : input;
+      if (!isAllowedUrl(url)) {
+        report(url, 'fetch');
+        return Promise.reject(new TypeError('Failed to fetch'));
+      }
+      return nativeFetch(input, init);
+    };
+  }
+
+  var nativeXhrOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url) {
+    if (!isAllowedUrl(url)) {
+      report(url, 'XHR');
+      throw new Error('请求已被拦截: ' + url);
+    }
+    return nativeXhrOpen.apply(this, arguments);
+  };
+
+  var NativeWebSocket = window.WebSocket;
+  if (NativeWebSocket) {
+    function GuardedWebSocket(url, protocols) {
+      if (!isAllowedUrl(url)) {
+        report(url, 'WebSocket');
+        throw new Error('请求已被拦截: ' + url);
+      }
+      return arguments.length > 1 ? new NativeWebSocket(url, protocols) : new NativeWebSocket(url);
+    }
+    GuardedWebSocket.prototype = NativeWebSocket.prototype;
+    GuardedWebSocket.CONNECTING = NativeWebSocket.CONNECTING;
+    GuardedWebSocket.OPEN = NativeWebSocket.OPEN;
+    GuardedWebSocket.CLOSING = NativeWebSocket.CLOSING;
+    GuardedWebSocket.CLOSED = NativeWebSocket.CLOSED;
+    window.WebSocket = GuardedWebSocket;
+  }
+
+  var NativeEventSource = window.EventSource;
+  if (NativeEventSource) {
+    function GuardedEventSource(url, config) {
+      if (!isAllowedUrl(url)) {
+        report(url, 'EventSource');
+        throw new Error('请求已被拦截: ' + url);
+      }
+      return config === undefined ? new NativeEventSource(url) : new NativeEventSource(url, config);
+    }
+    GuardedEventSource.prototype = NativeEventSource.prototype;
+    window.EventSource = GuardedEventSource;
+  }
+
+  if (navigator.sendBeacon) {
+    var nativeBeacon = navigator.sendBeacon.bind(navigator);
+    navigator.sendBeacon = function (url, data) {
+      if (!isAllowedUrl(url)) {
+        report(url, 'sendBeacon');
+        return false;
+      }
+      return nativeBeacon(url, data);
+    };
+  }
+
+  if (navigator.serviceWorker && navigator.serviceWorker.register) {
+    var nativeRegister = navigator.serviceWorker.register.bind(navigator.serviceWorker);
+    navigator.serviceWorker.register = function (url, options) {
+      if (!isAllowedUrl(url)) {
+        report(url, 'ServiceWorker');
+        return Promise.reject(new TypeError('请求已被拦截'));
+      }
+      return nativeRegister(url, options);
+    };
+  }
+
+  var nativeOpen = window.open;
+  window.open = function (url) {
+    if (arguments.length > 0 && !isAllowedUrl(url)) {
+      report(url, 'window.open');
+      return null;
+    }
+    return nativeOpen.apply(this, arguments);
+  };
+
+  function hookLoadProperty(ctorName, prop) {
+    try {
+      var proto = window[ctorName] && window[ctorName].prototype;
+      if (!proto) { return; }
+      var desc = Object.getOwnPropertyDescriptor(proto, prop);
+      if (!desc || !desc.get || !desc.set) { return; }
+      Object.defineProperty(proto, prop, {
+        get: function () { return desc.get.call(this); },
+        set: function (value) {
+          if (isAllowedUrl(value)) {
+            desc.set.call(this, value);
+          } else {
+            report(value, ctorName + '.' + prop);
+          }
+        },
+        configurable: true,
+        enumerable: desc.enumerable,
+      });
+    } catch (error) { }
+  }
+
+  hookLoadProperty('HTMLScriptElement', 'src');
+  hookLoadProperty('HTMLImageElement', 'src');
+  hookLoadProperty('HTMLImageElement', 'srcset');
+  hookLoadProperty('HTMLLinkElement', 'href');
+  hookLoadProperty('HTMLIFrameElement', 'src');
+  hookLoadProperty('HTMLMediaElement', 'src');
+  hookLoadProperty('HTMLSourceElement', 'src');
+  hookLoadProperty('HTMLSourceElement', 'srcset');
+  hookLoadProperty('HTMLTrackElement', 'src');
+  hookLoadProperty('HTMLObjectElement', 'data');
+  hookLoadProperty('HTMLEmbedElement', 'src');
+  hookLoadProperty('HTMLVideoElement', 'poster');
+  hookLoadProperty('HTMLFormElement', 'action');
+  hookLoadProperty('HTMLInputElement', 'formAction');
+  hookLoadProperty('HTMLButtonElement', 'formAction');
+
+  var BLOCKED_ATTRS = ['src', 'srcset', 'data', 'poster', 'action', 'formaction'];
+
+  var nativeSetAttribute = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function (name, value) {
+    var key = String(name || '').toLowerCase();
+    if (BLOCKED_ATTRS.indexOf(key) !== -1 && !isAllowedUrl(value)) {
+      report(value, '@' + key);
+      return;
+    }
+    return nativeSetAttribute.call(this, name, value);
+  };
+
+  function sanitizeElement(el) {
+    try {
+      for (var i = 0; i < BLOCKED_ATTRS.length; i++) {
+        var name = BLOCKED_ATTRS[i];
+        var value = el.getAttribute(name);
+        if (value != null && !isAllowedUrl(value)) {
+          el.removeAttribute(name);
+          report(value, 'DOM @' + name);
+        }
+      }
+    } catch (error) { }
+  }
+
+  function sanitizeTree(root) {
+    try {
+      sanitizeElement(root);
+      if (root.querySelectorAll) {
+        var nodes = root.querySelectorAll('[src],[srcset],[data],[poster],[action],[formaction]');
+        for (var i = 0; i < nodes.length; i++) { sanitizeElement(nodes[i]); }
+      }
+    } catch (error) { }
+  }
+
+  if (window.MutationObserver) {
+    new MutationObserver(function (mutations) {
+      for (var i = 0; i < mutations.length; i++) {
+        var added = mutations[i].addedNodes;
+        for (var j = 0; j < added.length; j++) {
+          if (added[j].nodeType === 1) { sanitizeTree(added[j]); }
+        }
+      }
+    }).observe(document.documentElement || document, { childList: true, subtree: true });
+  }
+
+  try {
+    var meta = document.createElement('meta');
+    meta.setAttribute('name', 'referrer');
+    meta.setAttribute('content', 'no-referrer');
+    var head = document.head || document.documentElement;
+    head.insertBefore(meta, head.firstChild);
+  } catch (error) { }
+
+  try {
+    window.addEventListener('pagehide', flushNow);
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') { flushNow(); }
+    });
+  } catch (error) { }
+})();
+
+</script>
+</head>
+<body>
+<div class="wrap">
+  <h1>镜像外联泄漏防护（egress guard）· 本地演示</h1>
+  <p class="sub">
+    本页面内嵌了与 <code>install_egress_guard</code> 注入到镜像页面<strong>完全相同</strong>的防护脚本（位于 head 最前）。
+    白名单：<code>镜像自身域名</code>、<code>challenges.cloudflare.com</code>、<code>cdn.example.com</code>（演示用可信 CDN）。
+    其余跨源请求一律在浏览器侧拦截，不会发出真实网络流量；拦截目标约 3 秒后自动上报。
+  </p>
+  <div class="panel">
+    <div class="btns">
+      <button class="block" data-act="fetch-oai">fetch → cdn.oaistatic.com</button>
+      <button class="block" data-act="xhr-ab">XHR → ab.chatgpt.com</button>
+      <button class="block" data-act="img">img.src → cdn.oaistatic.com</button>
+      <button class="block" data-act="script">script.src → sentry</button>
+      <button class="block" data-act="ws">WebSocket → wss://statsig</button>
+      <button class="block" data-act="beacon">sendBeacon → openai</button>
+      <button class="allow" data-act="same">fetch /0x/user/version-cfg（同源放行）</button>
+      <button class="allow" data-act="trusted">fetch cdn.example.com（可信放行）</button>
+      <button data-act="auto">自动演示全部</button>
+    </div>
+  </div>
+  <pre id="log"></pre>
+  <p class="sub">
+    查看上报结果：先在 <a href="/admin/">管理台 /admin/</a> 登录（本地账号见启动说明），再打开
+    「访问日志 → 外联拦截」。未登录时上报会被 401 静默忽略，属于预期行为。
+  </p>
+</div>
+<script>
+(function () {
+  var logEl = document.getElementById('log');
+  function line(text, cls) {
+    var row = document.createElement('div');
+    if (cls) { row.className = cls; }
+    row.textContent = text;
+    logEl.appendChild(row);
+  }
+  var nativeWarn = console.warn.bind(console);
+  console.warn = function () {
+    nativeWarn.apply(null, arguments);
+    line('[console.warn] ' + Array.prototype.join.call(arguments, ' '), 't-dim');
+  };
+  line('防护脚本已就绪：window.__MIRROR_EGRESS_GUARD__ = ' + window.__MIRROR_EGRESS_GUARD__, 't-info');
+
+  var acts = {
+    'fetch-oai': function () {
+      return fetch('https://cdn.oaistatic.com/assets/fake-app.js')
+        .then(function () { line('✗ fetch 未被拦截（异常！）', 't-block'); })
+        .catch(function (e) { line('✓ fetch 已拦截 → ' + e, 't-block'); });
+    },
+    'xhr-ab': function () {
+      return new Promise(function (resolve) {
+        try {
+          var xhr = new XMLHttpRequest();
+          xhr.open('GET', 'https://ab.chatgpt.com/backend-api/fake');
+          line('✗ XHR 未被拦截（异常！）', 't-block');
+        } catch (e) {
+          line('✓ XHR 已拦截 → ' + e.message, 't-block');
+        }
+        resolve();
+      });
+    },
+    'img': function () {
+      return new Promise(function (resolve) {
+        var img = new Image();
+        var done = false;
+        img.onload = img.onerror = function () { if (!done) { done = true; line('✗ img 未被拦截（异常！）', 't-block'); resolve(); } };
+        img.src = 'https://cdn.oaistatic.com/fake-logo.png';
+        setTimeout(function () {
+          if (!done) { done = true; line('✓ img.src 已拦截（不会触发 load/error）', 't-block'); resolve(); }
+        }, 1200);
+      });
+    },
+    'script': function () {
+      return new Promise(function (resolve) {
+        var s = document.createElement('script');
+        s.src = 'https://browser.sentry-cdn.com/fake.js';
+        document.head.appendChild(s);
+        setTimeout(function () {
+          line(s.src ? '✓ script.src 已拦截（属性未生效）' : '✗ script.src 未被拦截（异常！）', 't-block');
+          if (s.parentNode) { s.parentNode.removeChild(s); }
+          resolve();
+        }, 600);
+      });
+    },
+    'ws': function () {
+      return new Promise(function (resolve) {
+        try {
+          new WebSocket('wss://statsig.example.net/collect');
+          line('✗ WebSocket 未被拦截（异常！）', 't-block');
+        } catch (e) {
+          line('✓ WebSocket 已拦截 → ' + e.message, 't-block');
+        }
+        resolve();
+      });
+    },
+    'beacon': function () {
+      var ok = navigator.sendBeacon('https://api.openai.com/telemetry', 'ping');
+      line(ok ? '✗ sendBeacon 未被拦截（异常！）' : '✓ sendBeacon 已拦截（返回 false）', 't-block');
+      return Promise.resolve();
+    },
+    'same': function () {
+      return fetch('/0x/user/version-cfg')
+        .then(function (res) { line('✓ 同源请求放行：/0x/user/version-cfg → HTTP ' + res.status, 't-allow'); })
+        .catch(function (e) { line('同源请求放行但网络失败：' + e, 't-dim'); });
+    },
+    'trusted': function () {
+      return fetch('https://cdn.example.com/x.js')
+        .then(function (res) { line('✓ 可信 CDN 放行 → HTTP ' + res.status, 't-allow'); })
+        .catch(function (e) { line('✓ 可信 CDN 放行（DNS/网络失败属正常：' + e.message + '）', 't-allow'); });
+    },
+  };
+
+  document.querySelector('.btns').addEventListener('click', function (event) {
+    var act = event.target && event.target.getAttribute && event.target.getAttribute('data-act');
+    if (act && acts[act]) { acts[act](); }
+  });
+
+  document.querySelector('[data-act="auto"]').addEventListener('click', function () {
+    var order = ['fetch-oai', 'xhr-ab', 'img', 'script', 'ws', 'beacon', 'same', 'trusted'];
+    order.reduce(function (prev, key) {
+      return prev.then(function () { return acts[key](); });
+    }, Promise.resolve());
+  });
+
+  setTimeout(function () {
+    line('— 页面加载 1.5s，自动触发一次拦截演示（fetch → cdn.oaistatic.com）—', 't-info');
+    acts['fetch-oai']();
+  }, 1500);
+})();
+</script>
+</body>
+</html>
