@@ -41,7 +41,7 @@ const renderedContent = computed(() => markdown.render(props.content || ''))
 
 <style scoped>
 .markdown-body {
-  color: #374151;
+  color: #3c382f;
   font-size: 14px;
   line-height: 1.75;
   overflow-wrap: anywhere;
@@ -60,7 +60,8 @@ const renderedContent = computed(() => markdown.render(props.content || ''))
 .markdown-body :deep(h3),
 .markdown-body :deep(h4) {
   margin: 1.2em 0 0.55em;
-  color: #111827;
+  color: var(--app-text);
+  font-family: var(--app-font-serif);
   font-weight: 600;
   line-height: 1.4;
 }
@@ -100,24 +101,24 @@ const renderedContent = computed(() => markdown.render(props.content || ''))
 
 .markdown-body :deep(blockquote) {
   padding: 0.2em 0 0.2em 1em;
-  border-left: 3px solid #d1d5db;
-  color: #6b7280;
+  border-left: 3px solid var(--app-border-strong);
+  color: var(--app-text-muted);
 }
 
 .markdown-body :deep(code) {
   padding: 0.15em 0.35em;
   border-radius: 4px;
-  background: #eef0f3;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background: #f1ede2;
+  font-family: var(--app-font-mono);
   font-size: 0.9em;
 }
 
 .markdown-body :deep(pre) {
   padding: 12px 14px;
   overflow-x: auto;
-  border-radius: 8px;
-  background: #111827;
-  color: #f9fafb;
+  border-radius: 10px;
+  background: #2b2620;
+  color: #f5f1e8;
 }
 
 .markdown-body :deep(pre code) {
@@ -136,7 +137,7 @@ const renderedContent = computed(() => markdown.render(props.content || ''))
 .markdown-body :deep(th),
 .markdown-body :deep(td) {
   padding: 6px 10px;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--app-border-strong);
   text-align: left;
 }
 

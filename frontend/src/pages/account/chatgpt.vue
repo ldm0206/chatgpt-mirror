@@ -8,6 +8,10 @@
             <template #icon><t-icon name="search" /></template>
             一键检测
           </t-button>
+          <t-button variant="outline" @click="openBatchProxyDialog">
+            <template #icon><t-icon name="link" /></template>
+            批量设置代理
+          </t-button>
           <t-button theme="primary" @click="showAddDialog">
             <template #icon><t-icon name="add" /></template>
             添加账号
@@ -24,6 +28,7 @@
       </div>
 
       <t-table
+        v-model:selected-row-keys="selectedRowKeys"
         :data="tableData"
         :columns="columns"
         :loading="loading"
@@ -152,11 +157,49 @@
               v-for="node in proxyNodeOptions"
               :key="node.id"
               :value="node.id"
-              :label="`节点 ${node.id}`"
+              :label="node.label"
             />
           </t-select>
         </t-form-item>
       </t-form>
+    </t-dialog>
+
+    <!-- 批量代理对话框 -->
+    <t-dialog
+      :visible="batchDialogVisible"
+      header="批量设置代理节点"
+      :confirm-btn="{ loading: batchLoading }"
+      @confirm="handleBatchProxy"
+      @close="batchDialogVisible = false"
+      width="520px"
+    >
+      <t-form label-width="120px">
+        <t-form-item label="生效范围">
+          <t-space direction="vertical" align="start">
+            <t-checkbox v-model="batchForm.apply_to_all" @change="onBatchScopeChange">
+              应用到全部上游账号
+            </t-checkbox>
+            <span class="batch-hint">
+              {{ batchForm.apply_to_all
+                ? `将覆盖全部 ${pagination.total} 个账号`
+                : `已选中 ${selectedRowKeys.length} 个账号` }}
+            </span>
+          </t-space>
+        </t-form-item>
+        <t-form-item label="代理节点">
+          <t-select v-model="batchForm.proxy_node_id" clearable placeholder="不选择则恢复直连">
+            <t-option
+              v-for="node in proxyNodeOptions"
+              :key="node.id"
+              :value="node.id"
+              :label="node.label"
+            />
+          </t-select>
+        </t-form-item>
+      </t-form>
+      <t-alert
+        message="代理节点在镜像用户下次登录或账号重新检测时生效。"
+      />
     </t-dialog>
   </div>
 </template>
@@ -175,13 +218,20 @@ const addFormRef = ref()
 const editFormRef = ref()
 const tableData = ref<any[]>([])
 const tokenInput = ref('')
-const proxyNodeOptions = ref<Array<{ id: number }>>([])
+const proxyNodeOptions = ref<Array<{ id: number; used: number; label: string }>>([])
 const checkingAll = ref(false)
 const checkingId = ref<number | null>(null)
 const refreshingId = ref<number | null>(null)
 const nowSeconds = ref(Math.floor(Date.now() / 1000))
 const query = ref('')
 const statusFilter = ref('')
+const selectedRowKeys = ref<Array<string | number>>([])
+const batchDialogVisible = ref(false)
+const batchLoading = ref(false)
+const batchForm = reactive({
+  apply_to_all: false,
+  proxy_node_id: null as number | null
+})
 
 const pagination = reactive({
   current: 1,
@@ -190,6 +240,7 @@ const pagination = reactive({
 })
 
 const columns = [
+  { colKey: 'row-select', type: 'multiple' as const, width: 46 },
   { colKey: 'id', title: 'ID', width: 80 },
   { colKey: 'chatgpt_username', title: '账号', ellipsis: true },
   { colKey: 'plan_type', title: '套餐', cell: 'plan_type', width: 100 },
@@ -299,12 +350,57 @@ const applyFilters = () => {
 }
 
 const fetchProxyNodes = async () => {
-  const data = await request('/0x/user/proxy-config')
+  const [data, usage] = await Promise.all([
+    request('/0x/user/proxy-config'),
+    request('/0x/chatgpt/proxy-usage')
+  ])
+  if (!data) return
+
+  const counts: Record<string, number> = usage?.usage || {}
+  proxyNodeOptions.value = (data.nodes || [])
+    .filter((node: any) => node.enabled)
+    .map((node: any) => {
+      const id = Number(node.id)
+      const used = counts[String(id)] || 0
+      return { id, used, label: used ? `节点 ${id}（${used} 个账号在用）` : `节点 ${id}` }
+    })
+    .filter((node: any) => node.id > 0)
+    // Frequently used nodes first: the console's equivalent of remembered presets.
+    .sort((a: any, b: any) => b.used - a.used || a.id - b.id)
+}
+
+const openBatchProxyDialog = () => {
+  if (!batchForm.apply_to_all && selectedRowKeys.value.length === 0) {
+    MessagePlugin.warning('请先勾选账号，或选择应用到全部账号')
+    return
+  }
+  batchDialogVisible.value = true
+}
+
+const onBatchScopeChange = () => {
+  if (batchForm.apply_to_all) selectedRowKeys.value = []
+}
+
+const handleBatchProxy = async () => {
+  if (!batchForm.apply_to_all && selectedRowKeys.value.length === 0) {
+    MessagePlugin.warning('请先勾选账号，或选择应用到全部账号')
+    return
+  }
+
+  batchLoading.value = true
+  const data = await request('/0x/chatgpt/batch-proxy', 'POST', {
+    account_ids: batchForm.apply_to_all ? [] : selectedRowKeys.value.map(Number),
+    apply_to_all: batchForm.apply_to_all,
+    proxy_node_id: batchForm.proxy_node_id || null
+  })
+  batchLoading.value = false
+
   if (data) {
-    proxyNodeOptions.value = (data.nodes || [])
-      .filter((node: any) => node.enabled)
-      .map((node: any) => ({ id: Number(node.id) }))
-      .filter((node: any) => node.id > 0)
+    MessagePlugin.success(data.message || '已更新')
+    batchDialogVisible.value = false
+    selectedRowKeys.value = []
+    fetchProxyNodes()
+    fetchData()
   }
 }
 
@@ -473,5 +569,10 @@ const handleResetLoginCount = async (row: any) => {
   grid-template-columns: minmax(240px, 1fr) 180px auto;
   gap: 10px;
   margin-bottom: 16px;
+}
+
+.batch-hint {
+  color: var(--app-text-muted);
+  font-size: 13px;
 }
 </style>

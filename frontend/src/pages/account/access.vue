@@ -67,12 +67,16 @@
       <span v-if="saved" class="saved-text">已保存</span>
     </t-card>
 
-    <t-card title="登录人机验证" subtitle="此设置由运行环境控制，修改后需要重启服务" bordered>
+    <t-card title="登录人机验证" subtitle="Cloudflare Turnstile" bordered>
+      <template #subtitle>
+        开启后，每次登录、免费体验和注册都必须先通过验证
+      </template>
+
       <div class="security-status">
         <div>
-          <div class="status-title">Cloudflare Turnstile</div>
+          <div class="status-title">当前状态</div>
           <div class="status-description">
-            开启后，每次登录、免费体验和注册都必须完成验证。
+            生效来源：{{ turnstileSourceLabel }}
           </div>
         </div>
         <t-tag :theme="turnstileCfg.enabled ? 'success' : 'default'" variant="light">
@@ -80,41 +84,227 @@
         </t-tag>
       </div>
 
-      <div class="env-list">
-        <div class="env-row">
-          <code>CLOUDFLARE_TURNSTILE</code>
-          <span>{{ turnstileCfg.enabled ? 'enable' : 'disable' }}</span>
+      <template v-if="canEditSecurity">
+        <div class="section">
+          <h4>站点密钥</h4>
+          <t-input
+            v-model="turnstileForm.turnstile_site_key"
+            aria-label="站点密钥"
+            placeholder="0x4AAAAAAA..."
+            :maxlength="256"
+          />
+          <div class="field-help">站点密钥是唯一会下发到浏览器的那个，可以随时更换</div>
         </div>
-        <div class="env-row">
-          <code>CLOUDFLARE_TURNSTILE_SITE_KEY</code>
-          <span>{{ turnstileCfg.siteKeyConfigured ? '已配置' : '未生效' }}</span>
+
+        <div class="section">
+          <h4>密钥</h4>
+          <t-input
+            v-model="turnstileForm.turnstile_secret_key"
+            aria-label="密钥"
+            type="password"
+            :maxlength="256"
+            :placeholder="turnstileCfg.secretConfigured ? '已保存，留空表示不修改' : '请输入密钥'"
+          />
+          <div class="field-help">密钥只留在服务端，不会出现在任何接口响应中</div>
         </div>
-        <div class="env-row">
-          <code>CLOUDFLARE_TURNSTILE_SECRET_KEY</code>
-          <span>{{ turnstileCfg.enabled ? '仅后端可见' : '未生效' }}</span>
-        </div>
-      </div>
+
+        <t-divider />
+
+        <t-button theme="primary" :loading="savingTurnstile" @click="saveTurnstile">
+          保存人机验证配置
+        </t-button>
+        <span v-if="turnstileSaved" class="saved-text">已保存</span>
+
+        <t-alert
+          class="security-note"
+          message="保存的值优先于 .env；清空站点密钥保存即把这一对交还给 .env，因此由 .env 提供的那一对只能在 .env 里关闭。"
+        />
+      </template>
 
       <t-alert
+        v-else
         class="security-note"
-        message="disable 时，已填写的站点密钥和机密不会用于登录验证；enable 时缺少任一配置将阻止服务启动。"
+        message="只有超级管理员可以修改人机验证配置。"
+      />
+    </t-card>
+
+    <t-card title="OIDC 单点登录" subtitle="OpenID Connect Provider" bordered>
+      <template #subtitle>
+        开启后，登录页会出现「使用身份提供方登录」按钮
+      </template>
+
+      <div class="security-status">
+        <div>
+          <div class="status-title">当前状态</div>
+          <div class="status-description">
+            生效来源：{{ oidcSourceLabel }}
+          </div>
+        </div>
+        <t-tag :theme="oidcCfg.enabled ? 'success' : 'default'" variant="light">
+          {{ oidcCfg.enabled ? '已开启' : '未开启' }}
+        </t-tag>
+      </div>
+
+      <template v-if="canEditSecurity">
+        <div class="section">
+          <h4>Issuer</h4>
+          <t-input
+            v-model="oidcForm.oidc_issuer"
+            aria-label="Issuer"
+            placeholder="https://id.example.com/realms/main"
+            :maxlength="255"
+          />
+          <div class="field-help">填到 realm/租户一级；镜像会自动读取其 discovery 文档</div>
+        </div>
+
+        <div class="section">
+          <h4>Client ID</h4>
+          <t-input v-model="oidcForm.oidc_client_id" aria-label="Client ID" :maxlength="256" />
+        </div>
+
+        <div class="section">
+          <h4>Client Secret</h4>
+          <t-input
+            v-model="oidcForm.oidc_client_secret"
+            aria-label="Client Secret"
+            type="password"
+            :maxlength="512"
+            :placeholder="oidcCfg.secretConfigured ? '已保存，留空表示不修改' : '请输入密钥'"
+          />
+          <div class="field-help">密钥只留在服务端，不会出现在任何接口响应中</div>
+        </div>
+
+        <div class="section">
+          <h4>回调地址</h4>
+          <t-input
+            v-model="oidcForm.oidc_redirect_uri"
+            aria-label="回调地址"
+            :maxlength="300"
+            :placeholder="oidcCfg.redirectUriSuggested || 'https://你的域名/0x/user/oidc/callback'"
+          />
+          <div class="field-help">
+            留空则自动推导为 {{ oidcCfg.redirectUriSuggested || '（当前无法推导，请手动填写）' }}；在 IdP 侧登记的回调地址就是它
+          </div>
+        </div>
+
+        <div class="section">
+          <h4>Scopes</h4>
+          <t-input v-model="oidcForm.oidc_scopes" aria-label="Scopes" :maxlength="256" />
+          <div class="field-help">必须包含 openid；需要用户名/邮箱时保留 profile email</div>
+        </div>
+
+        <div class="section">
+          <h4>显示名称</h4>
+          <t-input
+            v-model="oidcForm.oidc_display_name"
+            aria-label="显示名称"
+            :maxlength="32"
+            placeholder="SSO"
+          />
+          <div class="field-help">登录页按钮上显示的名字，例如 Keycloak</div>
+        </div>
+
+        <div class="section">
+          <h4>用户名声明</h4>
+          <t-input
+            v-model="oidcForm.oidc_username_claim"
+            aria-label="用户名声明"
+            :maxlength="64"
+            placeholder="preferred_username"
+          />
+          <div class="field-help">用于把身份绑定到镜像用户名；留空按 preferred_username 处理</div>
+        </div>
+
+        <div class="section">
+          <h4>开通策略</h4>
+          <t-space direction="vertical" size="12px">
+            <t-checkbox v-model="oidcForm.oidc_auto_provision">
+              自动开通新用户（首次登录自动创建，无上游账号，需管理员分号池）
+            </t-checkbox>
+            <t-checkbox v-model="oidcForm.oidc_auto_link_by_username">
+              按用户名自动绑定既有镜像用户
+            </t-checkbox>
+            <t-checkbox v-model="oidcForm.oidc_link_admins">
+              允许自动绑定管理员账号（有接管超管风险，确认 IdP 可信后再开启）
+            </t-checkbox>
+          </t-space>
+        </div>
+
+        <t-divider />
+
+        <t-button theme="primary" :loading="savingOidc" @click="saveOidc">
+          保存 OIDC 配置
+        </t-button>
+        <span v-if="oidcSaved" class="saved-text">已保存</span>
+
+        <t-alert
+          class="security-note"
+          message="保存的值优先于 .env；清空 Issuer 保存即把整套配置交还给 .env。退出登录只结束镜像会话，不会结束 IdP 的 SSO 会话。"
+        />
+      </template>
+
+      <t-alert
+        v-else
+        class="security-note"
+        message="只有超级管理员可以修改 OIDC 配置。"
       />
     </t-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import request from '@/api/request'
+import { useUserStore } from '@/store/user'
 
+const userStore = useUserStore()
 const blockedPaths = ref<string[]>([])
 const newPath = ref('')
 const saving = ref(false)
 const saved = ref(false)
 const turnstileCfg = ref({
   enabled: false,
-  siteKeyConfigured: false
+  siteKeyConfigured: false,
+  secretConfigured: false,
+  source: '',
+  revision: 0
+})
+const turnstileForm = reactive({
+  turnstile_site_key: '',
+  turnstile_secret_key: ''
+})
+const savingTurnstile = ref(false)
+const turnstileSaved = ref(false)
+const canEditSecurity = computed(() => userStore.isSuperuser)
+const oidcCfg = ref({
+  enabled: false,
+  source: '',
+  secretConfigured: false,
+  revision: 0,
+  redirectUriSuggested: ''
+})
+const oidcForm = reactive({
+  oidc_issuer: '',
+  oidc_client_id: '',
+  oidc_client_secret: '',
+  oidc_scopes: 'openid profile email',
+  oidc_display_name: 'SSO',
+  oidc_redirect_uri: '',
+  oidc_username_claim: 'preferred_username',
+  oidc_auto_provision: true,
+  oidc_auto_link_by_username: true,
+  oidc_link_admins: false
+})
+const savingOidc = ref(false)
+const oidcSaved = ref(false)
+const oidcSourceLabel = computed(() => {
+  if (!oidcCfg.value.enabled) return '未启用'
+  return oidcCfg.value.source === 'panel' ? '面板配置' : '.env 环境变量'
+})
+const turnstileSourceLabel = computed(() => {
+  if (!turnstileCfg.value.enabled) return '未启用'
+  return turnstileCfg.value.source === 'panel' ? '面板配置' : '.env 环境变量'
 })
 
 const presets = [
@@ -136,7 +326,99 @@ onMounted(async () => {
     turnstileCfg.value.enabled = Boolean(versionResponse.turnstile_enabled)
     turnstileCfg.value.siteKeyConfigured = Boolean(versionResponse.turnstile_site_key)
   }
+  if (canEditSecurity.value) {
+    await loadTurnstileConfig()
+    await loadOidcConfig()
+  }
 })
+
+async function loadOidcConfig() {
+  const data = await request('/0x/user/oidc-config')
+  if (!data) return
+  oidcCfg.value.enabled = Boolean(data.active_enabled)
+  oidcCfg.value.source = data.active_source || ''
+  oidcCfg.value.secretConfigured = Boolean(data.secret_configured)
+  oidcCfg.value.revision = data.revision ?? 0
+  oidcCfg.value.redirectUriSuggested = data.redirect_uri_suggested || ''
+  oidcForm.oidc_issuer = data.oidc_issuer || ''
+  oidcForm.oidc_client_id = data.oidc_client_id || ''
+  oidcForm.oidc_scopes = data.oidc_scopes || 'openid profile email'
+  oidcForm.oidc_display_name = data.oidc_display_name || 'SSO'
+  oidcForm.oidc_redirect_uri = data.oidc_redirect_uri || ''
+  oidcForm.oidc_username_claim = data.oidc_username_claim || 'preferred_username'
+  oidcForm.oidc_auto_provision = Boolean(data.oidc_auto_provision)
+  oidcForm.oidc_auto_link_by_username = Boolean(data.oidc_auto_link_by_username)
+  oidcForm.oidc_link_admins = Boolean(data.oidc_link_admins)
+  oidcForm.oidc_client_secret = ''
+}
+
+async function saveOidc() {
+  savingOidc.value = true
+  oidcSaved.value = false
+  const payload: Record<string, unknown> = {
+    revision: oidcCfg.value.revision,
+    oidc_issuer: oidcForm.oidc_issuer.trim(),
+    oidc_client_id: oidcForm.oidc_client_id.trim(),
+    oidc_scopes: oidcForm.oidc_scopes.trim(),
+    oidc_display_name: oidcForm.oidc_display_name.trim(),
+    oidc_redirect_uri: oidcForm.oidc_redirect_uri.trim(),
+    oidc_username_claim: oidcForm.oidc_username_claim.trim(),
+    oidc_auto_provision: oidcForm.oidc_auto_provision,
+    oidc_auto_link_by_username: oidcForm.oidc_auto_link_by_username,
+    oidc_link_admins: oidcForm.oidc_link_admins
+  }
+  if (oidcForm.oidc_client_secret) {
+    payload.oidc_client_secret = oidcForm.oidc_client_secret
+  }
+
+  const data = await request('/0x/user/oidc-config', 'PUT', payload)
+  if (data) {
+    oidcCfg.value.enabled = Boolean(data.active_enabled)
+    oidcCfg.value.source = data.active_source || ''
+    oidcCfg.value.secretConfigured = Boolean(data.secret_configured)
+    oidcCfg.value.revision = data.revision ?? oidcCfg.value.revision
+    oidcCfg.value.redirectUriSuggested = data.redirect_uri_suggested || ''
+    oidcForm.oidc_client_secret = ''
+    oidcSaved.value = true
+    MessagePlugin.success('OIDC 配置已保存')
+  }
+  savingOidc.value = false
+}
+
+async function loadTurnstileConfig() {
+  const data = await request('/0x/user/turnstile-config')
+  if (!data) return
+  turnstileCfg.value.enabled = Boolean(data.active_enabled)
+  turnstileCfg.value.source = data.active_source || ''
+  turnstileCfg.value.secretConfigured = Boolean(data.secret_configured)
+  turnstileCfg.value.revision = data.revision ?? 0
+  turnstileForm.turnstile_site_key = data.turnstile_site_key || ''
+}
+
+async function saveTurnstile() {
+  savingTurnstile.value = true
+  turnstileSaved.value = false
+  const payload: Record<string, unknown> = {
+    revision: turnstileCfg.value.revision,
+    turnstile_site_key: turnstileForm.turnstile_site_key.trim()
+  }
+  if (turnstileForm.turnstile_secret_key) {
+    payload.turnstile_secret_key = turnstileForm.turnstile_secret_key
+  }
+
+  const data = await request('/0x/user/turnstile-config', 'PUT', payload)
+  if (data) {
+    turnstileCfg.value.enabled = Boolean(data.active_enabled)
+    turnstileCfg.value.source = data.active_source || ''
+    turnstileCfg.value.secretConfigured = Boolean(data.secret_configured)
+    turnstileCfg.value.revision = data.revision ?? turnstileCfg.value.revision
+    turnstileForm.turnstile_site_key = data.turnstile_site_key || ''
+    turnstileForm.turnstile_secret_key = ''
+    turnstileSaved.value = true
+    MessagePlugin.success('人机验证配置已保存')
+  }
+  savingTurnstile.value = false
+}
 
 function addPath() {
   const rawPath = newPath.value.trim()
@@ -292,7 +574,7 @@ async function save() {
   gap: 24px;
   min-height: 48px;
   padding: 10px 14px;
-  border-bottom: 1px solid #e8e8e4;
+  border-bottom: 1px solid var(--app-border);
 }
 
 .env-row:last-child {
@@ -300,7 +582,7 @@ async function save() {
 }
 
 .env-row code {
-  color: #3f3f3b;
+  color: var(--app-text);
   font-size: 12px;
   overflow-wrap: anywhere;
 }

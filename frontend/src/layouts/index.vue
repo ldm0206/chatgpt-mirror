@@ -1,15 +1,26 @@
 <template>
   <div class="layout">
     <t-layout class="layout-shell">
-      <t-aside class="sidebar" width="232px">
-        <div class="sidebar-title">
-          管理
+      <t-aside class="sidebar" width="248px">
+        <div class="sidebar-brand">
+          <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+            <g stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+              <line x1="12" y1="2.6" x2="12" y2="21.4" />
+              <line x1="2.6" y1="12" x2="21.4" y2="12" />
+              <line x1="5.3" y1="5.3" x2="18.7" y2="18.7" />
+              <line x1="18.7" y1="5.3" x2="5.3" y2="18.7" />
+            </g>
+          </svg>
+          <span class="brand-text">
+            <span class="brand-name">ChatGPT Mirror</span>
+            <span class="brand-caption">管理面板</span>
+          </span>
         </div>
         <t-menu
           class="nav-menu"
           :value="activeMenu"
           :collapsed="isSidebarCollapsed"
-          :width="['232px', '100%']"
+          :width="['248px', '100%']"
           theme="light"
           @change="handleMenuChange"
         >
@@ -158,45 +169,76 @@ const handleUserAction = async (data: { value: string }) => {
   height: 100vh;
   height: 100dvh;
   color: var(--app-text);
-  background: #f1f1ee;
+  background: var(--app-bg-deep);
   border-right: 1px solid var(--app-border);
 }
 
-.sidebar-title {
+.sidebar-brand {
   display: flex;
   align-items: center;
+  gap: 10px;
   height: 64px;
-  padding: 0 22px;
-  color: var(--app-text);
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  padding: 0 20px;
   border-bottom: 1px solid var(--app-border);
+}
+
+.brand-mark {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  color: var(--app-action);
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.brand-name {
+  color: var(--app-text);
+  font-family: var(--app-font-serif);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.brand-caption {
+  color: var(--app-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .nav-menu {
   width: 100% !important;
   box-sizing: border-box;
-  padding: 12px 10px;
+  padding: 14px 12px;
   background: transparent;
 }
 
 .nav-menu :deep(.t-menu__item) {
-  height: 44px;
-  margin-bottom: 4px;
-  color: #555550;
-  border-radius: 8px;
+  height: 42px;
+  margin-bottom: 2px;
+  color: #5c574a;
+  border-radius: 9px;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .nav-menu :deep(.t-menu__item:hover) {
   color: var(--app-text);
-  background: #e8e8e4;
+  background: #e5e1d2;
 }
 
 .nav-menu :deep(.t-menu__item.t-is-active) {
   color: var(--app-text);
   font-weight: 600;
-  background: #dededa;
+  background: #dcd6c2;
+}
+
+.nav-menu :deep(.t-menu__item.t-is-active .t-icon) {
+  color: var(--app-action);
 }
 
 .workspace {
@@ -213,16 +255,25 @@ const handleUserAction = async (data: { value: string }) => {
   align-items: center;
   height: 64px;
   padding: 0 32px;
-  background: rgba(247, 247, 245, 0.96);
+  background: rgba(245, 243, 236, 0.92);
   border-bottom: 1px solid var(--app-border);
+}
+
+@supports ((-webkit-backdrop-filter: blur(8px)) or (backdrop-filter: blur(8px))) {
+  .header {
+    background: rgba(245, 243, 236, 0.78);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+  }
 }
 
 .header h1 {
   margin: 0;
   color: var(--app-text);
-  font-size: 18px;
+  font-family: var(--app-font-serif);
+  font-size: 21px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0.01em;
 }
 
 .header-right {
@@ -231,13 +282,13 @@ const handleUserAction = async (data: { value: string }) => {
 }
 
 .user-button {
-  color: #4f4f4b;
-  border-radius: 7px;
+  color: #5c574a;
+  border-radius: 9px;
 }
 
 .user-button:hover {
   color: var(--app-text);
-  background: #ecece8;
+  background: var(--app-surface-muted);
 }
 
 .content {
@@ -248,7 +299,7 @@ const handleUserAction = async (data: { value: string }) => {
 
 .content-inner {
   width: 100%;
-  max-width: 1440px;
+  max-width: 1200px;
   margin: 0 auto;
 }
 
@@ -258,19 +309,25 @@ const handleUserAction = async (data: { value: string }) => {
     flex-basis: 76px !important;
   }
 
-  .sidebar-title {
+  .sidebar-brand {
     justify-content: center;
     padding: 0;
-    font-size: 0;
   }
 
-  .sidebar-title::after {
-    font-size: 15px;
-    content: "管理";
+  .brand-name,
+  .brand-caption {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    white-space: nowrap;
+    clip-path: inset(50%);
   }
 
   .nav-menu {
-    padding: 12px 8px;
+    padding: 14px 8px;
   }
 
   .nav-menu :deep(.t-menu__item) {
@@ -328,7 +385,7 @@ const handleUserAction = async (data: { value: string }) => {
   }
 
   .header h1 {
-    font-size: 16px;
+    font-size: 18px;
   }
 
   .user-button {

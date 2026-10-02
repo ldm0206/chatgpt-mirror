@@ -227,7 +227,7 @@ const handleSave = async () => {
   padding: 18px;
   border: 1px solid var(--app-border);
   border-radius: 10px;
-  background: #fafaf8;
+  background: #fbf9f3;
 }
 
 .script-title {

@@ -5,13 +5,95 @@
         {{ cfg.notice }}
       </div>
 
+      <p v-if="oidcError" class="oidc-error" role="alert">
+        {{ oidcError }}
+      </p>
+
       <header class="login-header">
-        <h1 id="login-title">{{ isRegister ? '创建账户' : '欢迎回来' }}</h1>
-        <p>{{ isRegister ? '填写账号信息以完成注册' : '输入账号信息以继续' }}</p>
+        <svg class="login-mark" viewBox="0 0 24 24" aria-hidden="true">
+          <g stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+            <line x1="12" y1="2.6" x2="12" y2="21.4" />
+            <line x1="2.6" y1="12" x2="21.4" y2="12" />
+            <line x1="5.3" y1="5.3" x2="18.7" y2="18.7" />
+            <line x1="18.7" y1="5.3" x2="5.3" y2="18.7" />
+          </g>
+        </svg>
+        <h1 id="login-title">{{ headerTitle }}</h1>
+        <p>{{ headerSubtitle }}</p>
       </header>
 
       <t-loading :loading="loading" class="login-loading">
         <t-form
+          v-if="setupNeeded"
+          ref="setupFormRef"
+          :data="setupForm"
+          :label-width="0"
+          :rules="setupRules"
+          class="login-form"
+          @submit="onSetupSubmit"
+        >
+          <div class="form-field">
+            <label for="setup-username">管理员用户名</label>
+            <t-form-item name="username">
+              <t-input
+                id="setup-username"
+                :model-value="setupAdminUsername"
+                readonly
+                disabled
+                size="large"
+              ></t-input>
+            </t-form-item>
+          </div>
+
+          <div class="form-field">
+            <label for="setup-password">管理员密码</label>
+            <t-form-item name="password">
+              <t-input
+                id="setup-password"
+                v-model="setupForm.password"
+                type="password"
+                autocomplete="new-password"
+                placeholder="请设置高强度密码"
+                size="large"
+              ></t-input>
+            </t-form-item>
+          </div>
+
+          <div class="form-field">
+            <label for="setup-confirm-password">确认密码</label>
+            <t-form-item name="confirm_password">
+              <t-input
+                id="setup-confirm-password"
+                v-model="setupForm.confirm_password"
+                type="password"
+                autocomplete="new-password"
+                placeholder="请再次输入密码"
+                size="large"
+              ></t-input>
+            </t-form-item>
+          </div>
+
+          <div v-if="turnstileEnabled" class="turnstile-field">
+            <div ref="turnstileContainer" class="turnstile-widget"></div>
+            <p v-if="turnstileError" class="turnstile-error" role="alert">
+              {{ turnstileError }}
+            </p>
+          </div>
+
+          <t-form-item class="submit-item">
+            <t-button
+              type="submit"
+              size="large"
+              class="login-button"
+              :disabled="loading || (turnstileEnabled && !turnstileToken)"
+            >
+              创建管理员并进入
+            </t-button>
+          </t-form-item>
+        </t-form>
+
+        <t-form
+          v-else
           ref="loginFormRef"
           :data="loginForm"
           :label-width="0"
@@ -78,29 +160,41 @@
         </t-form>
       </t-loading>
 
-      <p class="account-switch">
-        <template v-if="isRegister">
-          已有账户？
-          <router-link to="/login">登录</router-link>
-        </template>
-        <template v-else>
-          还没有账户？
-          <router-link to="/register">创建账户</router-link>
-        </template>
-      </p>
+      <template v-if="!setupNeeded">
+        <p class="account-switch">
+          <template v-if="isRegister">
+            已有账户？
+            <router-link to="/login">登录</router-link>
+          </template>
+          <template v-else>
+            还没有账户？
+            <router-link to="/register">创建账户</router-link>
+          </template>
+        </p>
 
-      <div class="login-divider" aria-hidden="true">
-        <span>或</span>
-      </div>
+        <div class="login-divider" aria-hidden="true">
+          <span>或</span>
+        </div>
 
-      <button
-        class="free-button"
-        type="button"
-        :disabled="loading || (turnstileEnabled && !turnstileToken)"
-        @click="goFree"
-      >
-        免费体验
-      </button>
+        <button
+          class="free-button"
+          type="button"
+          :disabled="loading || (turnstileEnabled && !turnstileToken)"
+          @click="goFree"
+        >
+          免费体验
+        </button>
+
+        <button
+          v-if="!isRegister && cfg.oidc_enabled"
+          class="free-button sso-button"
+          type="button"
+          :disabled="loading || ssoLoading"
+          @click="goOidc"
+        >
+          {{ ssoLoading ? '正在跳转…' : `使用 ${cfg.oidc_display_name || 'SSO'} 登录` }}
+        </button>
+      </template>
     </section>
   </main>
 </template>
@@ -131,7 +225,30 @@ const cfg = ref({
   show_github: true,
   notice: '',
   turnstile_enabled: false,
-  turnstile_site_key: ''
+  turnstile_site_key: '',
+  oidc_enabled: false,
+  oidc_display_name: 'SSO'
+})
+
+const OIDC_ERROR_MESSAGES: Record<string, string> = {
+  disabled: 'OIDC 登录未启用',
+  config: '回调地址未正确配置，请联系管理员',
+  provider: '无法连接身份提供方，请稍后重试',
+  state: '登录会话已失效，请重新登录',
+  token: '身份验证失败，请重新登录',
+  no_account: '该账号尚未开通镜像权限，请联系管理员',
+  conflict: '该账号不能自动绑定，请联系管理员',
+  inactive: '账号已停用，请联系管理员',
+  expired: '账号已过期，请联系管理员'
+}
+const oidcError = ref('')
+const ssoLoading = ref(false)
+const setupNeeded = ref(false)
+const setupAdminUsername = ref('')
+const setupFormRef = ref()
+const setupForm = reactive({
+  password: '',
+  confirm_password: ''
 })
 const loginFormRef = ref()
 const turnstileContainer = ref<HTMLElement | null>(null)
@@ -158,6 +275,22 @@ const isRegister = computed(() => {
 const turnstileEnabled = computed(() => {
   return cfg.value.turnstile_enabled && Boolean(cfg.value.turnstile_site_key)
 })
+const turnstileAction = computed(() => {
+  if (setupNeeded.value) return 'setup'
+  return isRegister.value ? 'register' : 'login'
+})
+const headerTitle = computed(() => {
+  if (setupNeeded.value) return '创建管理员'
+  return isRegister.value ? '创建账户' : '欢迎回来'
+})
+const headerSubtitle = computed(() => {
+  if (setupNeeded.value) return '首次使用，请先创建管理员账号'
+  return isRegister.value ? '填写账号信息以完成注册' : '输入账号信息以继续'
+})
+const setupRules = {
+  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+  confirm_password: [{ required: true, message: '请再次输入密码', trigger: 'blur' }]
+}
 
 let turnstileScriptPromise: Promise<void> | null = null
 
@@ -208,7 +341,7 @@ const renderTurnstile = async () => {
     removeTurnstile()
     turnstileWidgetId.value = window.turnstile.render(turnstileContainer.value, {
       sitekey: cfg.value.turnstile_site_key,
-      action: isRegister.value ? 'register' : 'login',
+      action: turnstileAction.value,
       theme: 'light',
       size: 'flexible',
       appearance: 'always',
@@ -233,6 +366,7 @@ const renderTurnstile = async () => {
 }
 
 onMounted(async () => {
+  readOidcError()
   if (route.query.logout === '1') {
     try {
       await userStore.logout()
@@ -241,8 +375,48 @@ onMounted(async () => {
     }
   }
   await getVersionCfg()
+  await getSetupStatus()
   await renderTurnstile()
 })
+
+const getSetupStatus = async () => {
+  try {
+    const response = await fetch('/0x/user/setup-status')
+    const data = await response.json()
+    setupNeeded.value = Boolean(data.needed)
+    setupAdminUsername.value = data.admin_username || ''
+  } catch (e) {
+    console.error('Failed to get setup status')
+  }
+}
+
+const onSetupSubmit = async ({ validateResult }: any) => {
+  if (validateResult !== true) return
+  if (loading.value) return
+  if (turnstileEnabled.value && !turnstileToken.value) {
+    MessagePlugin.warning('请完成人机验证')
+    return
+  }
+
+  if (setupForm.password !== setupForm.confirm_password) {
+    MessagePlugin.error('两次输入的密码不一致')
+    return
+  }
+
+  loading.value = true
+  try {
+    await userStore.setupAdmin({
+      password: setupForm.password,
+      confirm_password: setupForm.confirm_password,
+      turnstile_token: turnstileToken.value
+    })
+    router.push({ name: 'User' })
+  } catch (error: any) {
+    MessagePlugin.error(error.message || '初始化失败')
+    await renderTurnstile()
+  }
+  loading.value = false
+}
 
 watch(isRegister, async () => {
   if (turnstileEnabled.value) {
@@ -262,6 +436,31 @@ const getVersionCfg = async () => {
     Object.assign(cfg.value, data)
   } catch (e) {
     console.error('Failed to get version config')
+  }
+}
+
+const readOidcError = () => {
+  const code = String(route.query.oidc_error || '')
+  if (!code) return
+  oidcError.value = OIDC_ERROR_MESSAGES[code] || '登录失败，请稍后重试'
+  const query = { ...route.query }
+  delete query.oidc_error
+  router.replace({ query })
+}
+
+const goOidc = async () => {
+  if (loading.value || ssoLoading.value) return
+  ssoLoading.value = true
+  try {
+    const response = await fetch('/0x/user/oidc/login', { cache: 'no-store' })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok || !data.authorize_url) {
+      throw new Error(data.message || 'SSO 登录暂不可用')
+    }
+    window.location.assign(data.authorize_url)
+  } catch (error: any) {
+    MessagePlugin.error(error.message || 'SSO 登录暂不可用')
+    ssoLoading.value = false
   }
 }
 
@@ -344,13 +543,13 @@ const goFree = async () => {
 
 <style scoped>
 .login-page {
-  --login-bg: #f7f7f5;
+  --login-bg: #f5f3ec;
   --login-surface: #ffffff;
-  --login-text: #20201e;
-  --login-muted: #6f6f6b;
-  --login-border: #d9d9d5;
-  --login-border-hover: #aaa9a3;
-  --login-action: #252523;
+  --login-text: #29261f;
+  --login-muted: #736f62;
+  --login-border: #ddd7c4;
+  --login-border-hover: #b8b19d;
+  --login-action: #c15f3c;
 
   display: flex;
   justify-content: center;
@@ -370,12 +569,12 @@ const goFree = async () => {
 .login-notice {
   margin-bottom: 24px;
   padding: 12px 14px;
-  color: #4f4f4b;
+  color: #6b6656;
   font-size: 14px;
   line-height: 1.5;
-  background: #efefec;
-  border: 1px solid #e2e2de;
-  border-radius: 8px;
+  background: #f2efe4;
+  border: 1px solid #e5e0d0;
+  border-radius: 10px;
 }
 
 .login-header {
@@ -383,17 +582,25 @@ const goFree = async () => {
   text-align: center;
 }
 
+.login-mark {
+  width: 34px;
+  height: 34px;
+  margin-bottom: 18px;
+  color: var(--login-action);
+}
+
 .login-header h1 {
   margin: 0;
-  font-size: 30px;
+  font-family: var(--app-font-serif);
+  font-size: 34px;
   font-weight: 600;
   line-height: 1.25;
-  letter-spacing: -0.02em;
+  letter-spacing: 0.01em;
   text-wrap: balance;
 }
 
 .login-header p {
-  margin: 10px 0 0;
+  margin: 12px 0 0;
   color: var(--login-muted);
   font-size: 15px;
   line-height: 1.6;
@@ -411,7 +618,7 @@ const goFree = async () => {
 .form-field label {
   display: inline-block;
   margin-bottom: 8px;
-  color: #373735;
+  color: #4a463c;
   font-size: 14px;
   font-weight: 500;
   line-height: 20px;
@@ -427,7 +634,7 @@ const goFree = async () => {
   color: var(--login-text);
   background: var(--login-surface);
   border-color: var(--login-border);
-  border-radius: 8px;
+  border-radius: 12px;
   box-shadow: none;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
@@ -436,7 +643,7 @@ const goFree = async () => {
   padding: 12px 14px;
   background: var(--login-surface);
   border-color: var(--login-border);
-  border-radius: 8px;
+  border-radius: 12px;
   box-shadow: none;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
@@ -447,7 +654,7 @@ const goFree = async () => {
 
 .form-field :deep(.t-textarea--focused) {
   border-color: var(--login-action);
-  box-shadow: 0 0 0 1px var(--login-action);
+  box-shadow: 0 0 0 3px rgba(193, 95, 60, 0.16);
 }
 
 .form-field :deep(.t-textarea__inner) {
@@ -462,7 +669,7 @@ const goFree = async () => {
 
 .form-field :deep(.t-input--focused) {
   border-color: var(--login-action);
-  box-shadow: 0 0 0 1px var(--login-action);
+  box-shadow: 0 0 0 3px rgba(193, 95, 60, 0.16);
 }
 
 .form-field :deep(.t-input__inner) {
@@ -499,7 +706,7 @@ const goFree = async () => {
 
 .turnstile-error {
   margin: 8px 0 0;
-  color: #a3413a;
+  color: #b5402f;
   font-size: 13px;
   line-height: 1.5;
 }
@@ -507,24 +714,25 @@ const goFree = async () => {
 .login-button {
   width: 100%;
   height: 50px;
-  color: #f9f9f7;
+  color: #fbf7f0;
   font-size: 15px;
   font-weight: 600;
   background: var(--login-action);
   border-color: var(--login-action);
-  border-radius: 8px;
+  border-radius: 999px;
   box-shadow: none;
   transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
 }
 
 .login-button:hover {
-  background: #3a3a37;
-  border-color: #3a3a37;
+  color: #fbf7f0;
+  background: #ac5232;
+  border-color: #ac5232;
 }
 
 .login-button:active {
-  background: #171715;
-  border-color: #171715;
+  background: #96452a;
+  border-color: #96452a;
   transform: translateY(1px);
 }
 
@@ -544,15 +752,16 @@ const goFree = async () => {
 }
 
 .account-switch a {
-  color: var(--login-text);
+  color: var(--login-action);
   font-weight: 600;
   text-decoration: underline;
-  text-decoration-color: #b8b8b3;
+  text-decoration-color: #dfc3b3;
   text-underline-offset: 3px;
 }
 
 .account-switch a:hover {
-  text-decoration-color: var(--login-text);
+  color: #ac5232;
+  text-decoration-color: #ac5232;
 }
 
 .login-divider {
@@ -560,7 +769,7 @@ const goFree = async () => {
   align-items: center;
   gap: 12px;
   margin: 24px 0;
-  color: #8a8a85;
+  color: #9a9484;
   font-size: 13px;
 }
 
@@ -568,7 +777,7 @@ const goFree = async () => {
 .login-divider::after {
   flex: 1;
   height: 1px;
-  background: #dfdfdb;
+  background: #e0dac6;
   content: "";
 }
 
@@ -583,12 +792,12 @@ const goFree = async () => {
   cursor: pointer;
   background: var(--login-surface);
   border: 1px solid var(--login-border);
-  border-radius: 8px;
+  border-radius: 999px;
   transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
 }
 
 .free-button:hover:not(:disabled) {
-  background: #efefec;
+  background: #f3f0e6;
   border-color: var(--login-border-hover);
 }
 
@@ -599,6 +808,21 @@ const goFree = async () => {
 .free-button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.sso-button {
+  margin-top: 12px;
+}
+
+.oidc-error {
+  margin: 0 0 24px;
+  padding: 12px 14px;
+  color: #a3413a;
+  font-size: 14px;
+  line-height: 1.5;
+  background: #fbeeea;
+  border: 1px solid #f0d6cd;
+  border-radius: 10px;
 }
 
 @media (max-width: 520px) {
@@ -612,7 +836,7 @@ const goFree = async () => {
   }
 
   .login-header h1 {
-    font-size: 28px;
+    font-size: 30px;
   }
 }
 

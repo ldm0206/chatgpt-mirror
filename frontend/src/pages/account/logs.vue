@@ -17,6 +17,7 @@
           <t-option value="login" label="登录" />
           <t-option value="choose-gpt" label="选择账号" />
           <t-option value="proxy" label="代理请求" />
+          <t-option value="egress-blocked" label="外联拦截" />
         </t-select>
         <t-button variant="outline" @click="applyFilters">查询</t-button>
       </div>
@@ -128,7 +129,8 @@ const getLogTypeTheme = (type: string) => {
     'login': 'success',
     'choose-gpt': 'primary',
     'logout': 'warning',
-    'proxy': 'default'
+    'proxy': 'default',
+    'egress-blocked': 'danger'
   }
   return themes[type] || 'default'
 }
@@ -138,7 +140,8 @@ const getLogTypeText = (type: string) => {
     'login': '登录',
     'choose-gpt': '选择账号',
     'logout': '登出',
-    'proxy': '代理请求'
+    'proxy': '代理请求',
+    'egress-blocked': '外联拦截'
   }
   return texts[type] || type
 }
@@ -153,10 +156,10 @@ const formatTime = (timestamp: number) => {
   display: inline-flex;
   margin-left: 8px;
   padding: 2px 6px;
-  color: #5f5f5a;
+  color: var(--app-text-muted);
   font-size: 11px;
   line-height: 16px;
-  background: #efefec;
+  background: var(--app-surface-muted);
   border-radius: 4px;
 }
 .log-toolbar {
