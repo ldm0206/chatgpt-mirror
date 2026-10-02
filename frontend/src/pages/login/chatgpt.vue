@@ -102,11 +102,13 @@
       :cancel-btn="null"
       :close-btn="false"
       :close-on-overlay-click="false"
-      :confirm-btn="{ content: '继续选择账号', loading: tableLoading }"
+      :confirm-btn="{ content: loginBlocked ? '返回账户中心' : '继续选择账号', loading: tableLoading }"
       width="760px"
       @confirm="continueToAccountSelection"
     >
-      <div class="announcement-intro">请阅读管理员发布的公告，确认后继续选择 ChatGPT 账号。</div>
+      <div class="announcement-intro">
+        {{ loginBlocked ? '当前公告已暂停你的 ChatGPT 登录。你仍可使用站点账户，公告结束后可重新进入。' : '请阅读管理员发布的公告，确认后继续选择 ChatGPT 账号。' }}
+      </div>
       <t-tabs v-model="activeAnnouncementTab" class="announcement-tabs">
         <t-tab-panel
           v-if="announcements.global.length"
@@ -119,6 +121,7 @@
                 <h2>{{ item.title }}</h2>
                 <time>{{ formatAnnouncementSchedule(item) }}</time>
               </div>
+              <t-tag v-if="item.block_chatgpt_login" theme="danger" variant="light">暂停登录</t-tag>
               <MarkdownContent class="announcement-content" :content="item.content" />
             </article>
           </div>
@@ -134,6 +137,7 @@
                 <h2>{{ item.title }}</h2>
                 <time>{{ formatAnnouncementSchedule(item) }}</time>
               </div>
+              <t-tag v-if="item.block_chatgpt_login" theme="danger" variant="light">暂停登录</t-tag>
               <MarkdownContent class="announcement-content" :content="item.content" />
             </article>
           </div>
@@ -181,9 +185,10 @@
 
 <script setup lang="ts">
 import { MessagePlugin } from 'tdesign-vue-next'
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import request from '@/api/request'
+import { detectBrowserIp } from '@/api/browser-ip'
 import MarkdownContent from '@/components/MarkdownContent.vue'
 import { useUserStore } from '@/store/user'
 
@@ -208,6 +213,7 @@ type Announcement = {
   start_at: string
   end_at: string | null
   display_timezone: string
+  block_chatgpt_login: boolean
 }
 
 const announcements = reactive<{
@@ -219,6 +225,9 @@ const announcements = reactive<{
   personal: [],
   history: [],
 })
+const loginBlocked = computed(() =>
+  [...announcements.global, ...announcements.personal].some(item => item.block_chatgpt_login),
+)
 
 interface TableData {
   id: number
@@ -247,12 +256,12 @@ onMounted(async () => {
 })
 
 const prepareAnnouncements = async () => {
-  if (userStore.isAdmin) {
-    await getUserChatGPTAccountList()
-    return
-  }
   statusText.value = '正在加载公告...'
   const data = await request('/0x/user/announcements/current')
+  if (!data) {
+    statusText.value = '公告暂时无法加载，请刷新页面重试'
+    return
+  }
   announcements.global = data?.global || []
   announcements.personal = data?.personal || []
   announcements.history = data?.history || []
@@ -271,6 +280,10 @@ const prepareAnnouncements = async () => {
 
 const continueToAccountSelection = async () => {
   announcementVisible.value = false
+  if (loginBlocked.value) {
+    await router.push('/account/profile')
+    return
+  }
   await getUserChatGPTAccountList()
 }
 
@@ -372,6 +385,10 @@ const cancelQueue = async () => {
 onBeforeUnmount(stopQueuePolling)
 
 const onSelect = async (chatgptId: number | null) => {
+  if (loginBlocked.value) {
+    MessagePlugin.warning('公告生效期间，暂不能进入 ChatGPT')
+    return
+  }
   const current = tableData.value.find(item => item.id === chatgptId)
   const loginMode = resolveLoginMode(current)
   if (!loginMode) {
@@ -385,6 +402,7 @@ const onSelect = async (chatgptId: number | null) => {
   const data = await request('/0x/chatgpt/login', 'POST', {
     chatgpt_id: chatgptId,
     login_mode: loginMode,
+    browser_ip: await detectBrowserIp(),
   })
   tableLoading.value = false
 

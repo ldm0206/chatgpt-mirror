@@ -79,6 +79,9 @@ class AddUserAccountSerializer(serializers.Serializer):
     daily_quota = serializers.IntegerField(required=False, min_value=0, default=0)
     monthly_quota = serializers.IntegerField(required=False, min_value=0, default=0)
     force_chat_mode = serializers.BooleanField(required=False)
+    hide_chat_work_toggle = serializers.BooleanField(required=False)
+    hide_library = serializers.BooleanField(required=False)
+    hide_suggestions = serializers.BooleanField(required=False)
 
     def validate_password(self, value):
         if not value:
@@ -383,6 +386,7 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             "target_user_id",
             "target_username",
             "is_active",
+            "block_chatgpt_login",
             "start_at",
             "end_at",
             "display_timezone",
@@ -401,6 +405,7 @@ class AnnouncementWriteSerializer(serializers.Serializer):
     )
     target_user_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
     is_active = serializers.BooleanField(required=False, default=True)
+    block_chatgpt_login = serializers.BooleanField(required=False)
     start_at = serializers.DateTimeField(required=False, allow_null=True)
     end_at = serializers.DateTimeField(required=False, allow_null=True)
     display_timezone = serializers.CharField(required=False, default="Asia/Shanghai", max_length=64)
