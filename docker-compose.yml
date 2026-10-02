@@ -42,7 +42,9 @@ services:
       - chatgpt-network
 
   django:
-    image: lisa666520/chatgpt-mirror-django:backend
+    # 由 GitHub Actions 每次提交自动构建：ghcr.io/ldm0206/chatgpt-mirror/backend:<分支名|sha|latest>
+    # 需要固定版本时可覆盖，例如 DJANGO_IMAGE=ghcr.io/ldm0206/chatgpt-mirror/backend:sha-提交号
+    image: ${DJANGO_IMAGE:-ghcr.io/ldm0206/chatgpt-mirror/backend:latest}
     ports:
       - "127.0.0.1:18000:8000"
     environment:

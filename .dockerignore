@@ -1,0 +1,26 @@
+# backend 镜像只需要 backend/ 目录，其余内容排除以缩小构建上下文
+.git
+.gitignore
+.github
+.env
+.env.*
+!.env.example
+.venv
+venv
+
+frontend
+gateway
+imageandvideo
+dev_logs
+*.md
+
+# 本地运行产生的数据，不能打进镜像
+backend/logs
+backend/db
+backend/static
+
+__pycache__
+*.py[cod]
+node_modules
+.cache
+*.tmp
