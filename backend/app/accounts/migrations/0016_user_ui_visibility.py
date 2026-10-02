@@ -2,7 +2,7 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    dependencies = [("accounts", "0012_user_model_isolation")]
+    dependencies = [("accounts", "0015_sitesettings_oidc_oidcidentity")]
 
     operations = [
         migrations.AddField(

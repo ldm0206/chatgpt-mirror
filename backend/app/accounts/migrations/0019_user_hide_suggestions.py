@@ -2,7 +2,7 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    dependencies = [("accounts", "0015_announcement_block_chatgpt_login")]
+    dependencies = [("accounts", "0018_announcement_block_chatgpt_login")]
 
     operations = [
         migrations.AddField(

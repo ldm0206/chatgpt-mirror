@@ -2,7 +2,7 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    dependencies = [("accounts", "0014_visitlog_browser_ip")]
+    dependencies = [("accounts", "0017_visitlog_browser_ip")]
 
     operations = [
         migrations.AddField(

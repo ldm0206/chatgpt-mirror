@@ -2,7 +2,7 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    dependencies = [("accounts", "0013_user_ui_visibility")]
+    dependencies = [("accounts", "0016_user_ui_visibility")]
 
     operations = [
         migrations.AddField(
