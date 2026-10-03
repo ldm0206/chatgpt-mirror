@@ -1,0 +1,6 @@
+# 仅对 frontend/Dockerfile 生效：镜像里只需要构建好的静态产物。
+# 根目录的 .dockerignore 排除了 gateway/（为 backend 镜像瘦身），这里必须放回来。
+*
+!gateway
+gateway/*
+!gateway/static

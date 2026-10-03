@@ -163,6 +163,26 @@ docker compose logs -f
 docker compose down
 ```
 
+### 更新管理台前端
+
+官方网关镜像里自带的管理台是上游那份旧构建，本仓库的前端改动不会出现在部署里。CI 会在每次提交时于官方网关镜像之上覆盖本仓库构建的管理台，发布为 `ghcr.io/ldm0206/chatgpt-mirror/frontend`（标签规则与 backend 镜像一致，main 分支为 `latest`），`docker-compose.yml` 默认就用它，部署时拉取即可：
+
+```bash
+docker compose pull chatgpt-mirror
+```
+
+```bash
+docker compose up -d chatgpt-mirror
+```
+
+想固定某个版本时，在 `.env` 里设置 `FRONTEND_IMAGE=ghcr.io/ldm0206/chatgpt-mirror/frontend:sha-提交号`。需要本地构建镜像时：
+
+```bash
+cd frontend && npm ci && npm run build && cd .. && docker build -f frontend/Dockerfile -t chatgpt-mirror-frontend:local .
+```
+
+`frontend/Dockerfile` 只是在官方网关镜像上追加 `COPY gateway/static`，基础镜像可用 `--build-arg BASE_IMAGE=...` 覆盖。
+
 ### 使用 NGINX/Cloudflare 时记得开启 websocket 支持。并且 NGINX 要求填入以下内容，实现最大化的减少错误
 ### 错误出现
 ##### (400 Request Header Or Cookie Too Large、414 Request-URI Too Large)&(upstream sent too big header while reading response header from upstream)
@@ -201,7 +221,7 @@ client_header_buffer_size 64k;
 
 ### 登录人机验证
 
-Cloudflare Turnstile 既可以用 `.env` 配置，也可以由超级管理员在“访问与安全”页面里保存。面板里保存的优先于 `.env`；把站点密钥清空保存，就把这一对交还给 `.env`，因此由 `.env` 提供的那一对只能在 `.env` 里关闭。密钥只留在服务端，不会出现在任何接口响应里。
+Cloudflare Turnstile 既可以用 `.env` 配置，也可以由超级管理员在“访问与安全”页面里保存。面板里有一个「启用人机验证」开关，它优先于 `.env`：打开时用面板里保存的那一对，面板没填则沿用 `.env` 那一对；关掉则强制关闭，即使 `.env` 里有一对密钥也不生效。把站点密钥清空保存，就把这一对交还给 `.env`。密钥只留在服务端，不会出现在任何接口响应里。
 
 ### OIDC 单点登录
 
