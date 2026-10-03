@@ -77,6 +77,7 @@
           <div class="status-title">当前状态</div>
           <div class="status-description">
             生效来源：{{ turnstileSourceLabel }}
+            <span v-if="turnstileCfg.envEnabled" class="status-extra">（.env 里也配置了一对）</span>
           </div>
         </div>
         <t-tag :theme="turnstileCfg.enabled ? 'success' : 'default'" variant="light">
@@ -85,6 +86,18 @@
       </div>
 
       <template v-if="canEditSecurity">
+        <div class="section switch-row">
+          <t-switch v-model="turnstileForm.turnstile_enabled" size="large" />
+          <div>
+            <div class="switch-label">启用人机验证</div>
+            <div class="field-help">
+              面板开关优先于 .env；关掉后即使 .env 里有一对密钥也不会生效
+            </div>
+          </div>
+        </div>
+
+        <t-divider />
+
         <div class="section">
           <h4>站点密钥</h4>
           <t-input
@@ -92,6 +105,7 @@
             aria-label="站点密钥"
             placeholder="0x4AAAAAAA..."
             :maxlength="256"
+            :disabled="!turnstileForm.turnstile_enabled"
           />
           <div class="field-help">站点密钥是唯一会下发到浏览器的那个，可以随时更换</div>
         </div>
@@ -103,6 +117,7 @@
             aria-label="密钥"
             type="password"
             :maxlength="256"
+            :disabled="!turnstileForm.turnstile_enabled"
             :placeholder="turnstileCfg.secretConfigured ? '已保存，留空表示不修改' : '请输入密钥'"
           />
           <div class="field-help">密钥只留在服务端，不会出现在任何接口响应中</div>
@@ -117,7 +132,7 @@
 
         <t-alert
           class="security-note"
-          message="保存的值优先于 .env；清空站点密钥保存即把这一对交还给 .env，因此由 .env 提供的那一对只能在 .env 里关闭。"
+          message="保存的值优先于 .env；清空站点密钥保存即交还给 .env。开启时若没填密钥，则沿用 .env 里那一对。"
         />
       </template>
 
@@ -268,9 +283,11 @@ const turnstileCfg = ref({
   siteKeyConfigured: false,
   secretConfigured: false,
   source: '',
+  envEnabled: false,
   revision: 0
 })
 const turnstileForm = reactive({
+  turnstile_enabled: true,
   turnstile_site_key: '',
   turnstile_secret_key: ''
 })
@@ -391,7 +408,9 @@ async function loadTurnstileConfig() {
   turnstileCfg.value.enabled = Boolean(data.active_enabled)
   turnstileCfg.value.source = data.active_source || ''
   turnstileCfg.value.secretConfigured = Boolean(data.secret_configured)
+  turnstileCfg.value.envEnabled = Boolean(data.env_enabled)
   turnstileCfg.value.revision = data.revision ?? 0
+  turnstileForm.turnstile_enabled = data.turnstile_enabled !== false
   turnstileForm.turnstile_site_key = data.turnstile_site_key || ''
 }
 
@@ -400,6 +419,7 @@ async function saveTurnstile() {
   turnstileSaved.value = false
   const payload: Record<string, unknown> = {
     revision: turnstileCfg.value.revision,
+    turnstile_enabled: turnstileForm.turnstile_enabled,
     turnstile_site_key: turnstileForm.turnstile_site_key.trim()
   }
   if (turnstileForm.turnstile_secret_key) {
@@ -411,7 +431,9 @@ async function saveTurnstile() {
     turnstileCfg.value.enabled = Boolean(data.active_enabled)
     turnstileCfg.value.source = data.active_source || ''
     turnstileCfg.value.secretConfigured = Boolean(data.secret_configured)
+    turnstileCfg.value.envEnabled = Boolean(data.env_enabled)
     turnstileCfg.value.revision = data.revision ?? turnstileCfg.value.revision
+    turnstileForm.turnstile_enabled = data.turnstile_enabled !== false
     turnstileForm.turnstile_site_key = data.turnstile_site_key || ''
     turnstileForm.turnstile_secret_key = ''
     turnstileSaved.value = true
@@ -547,6 +569,22 @@ async function save() {
   gap: 20px;
 }
 
+.switch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.switch-label {
+  color: var(--app-text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.status-extra {
+  color: var(--app-text-muted);
+}
+
 .status-title {
   color: var(--app-text);
   font-size: 15px;
@@ -599,6 +637,7 @@ async function save() {
 
 @media (max-width: 640px) {
   .security-status,
+  .switch-row,
   .env-row {
     align-items: flex-start;
     flex-direction: column;

@@ -8,6 +8,7 @@ from django.utils import timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.accounts.models import Announcement, SiteSettings, User, VisitLog
+from app.accounts.turnstile import turnstile_env_configured
 from app.chatgpt.models import ChatgptAccount
 from app.settings import ADMIN_USERNAME
 
@@ -195,12 +196,13 @@ class TurnstileSettingsSerializer(serializers.ModelSerializer):
     turnstile_secret_key = serializers.CharField(
         write_only=True, required=False, allow_blank=True, max_length=256, trim_whitespace=False
     )
+    turnstile_enabled = serializers.BooleanField(required=False)
     secret_configured = serializers.SerializerMethodField()
     revision = serializers.IntegerField(min_value=0)
 
     class Meta:
         model = SiteSettings
-        fields = ("turnstile_site_key", "turnstile_secret_key", "secret_configured", "revision")
+        fields = ("turnstile_enabled", "turnstile_site_key", "turnstile_secret_key", "secret_configured", "revision")
 
     def get_secret_configured(self, obj):
         return bool(obj.turnstile_secret_key)
@@ -221,13 +223,21 @@ class TurnstileSettingsSerializer(serializers.ModelSerializer):
         return self._clean(value, "密钥")
 
     def validate(self, attrs):
-        site_key = attrs.get("turnstile_site_key", self.instance.turnstile_site_key or "").strip()
-        secret_key = attrs.get("turnstile_secret_key") or self.instance.turnstile_secret_key or ""
+        instance = self.instance
+        site_key = attrs.get("turnstile_site_key", (instance.turnstile_site_key if instance else "") or "").strip()
+        secret_key = attrs.get("turnstile_secret_key") or (instance.turnstile_secret_key if instance else "") or ""
         if site_key and not secret_key:
             raise serializers.ValidationError({"turnstile_secret_key": "填写站点密钥后需同时填写密钥"})
         if not site_key:
-            # Clearing the site key hands the pair back to the environment.
+            # Clearing the site key drops the panel pair, leaving the switch to decide.
             attrs["turnstile_secret_key"] = ""
+        enabled = attrs.get(
+            "turnstile_enabled", instance.turnstile_enabled if instance else True
+        )
+        if enabled and not site_key and not turnstile_env_configured():
+            raise serializers.ValidationError({
+                "turnstile_site_key": "开启人机验证需要填写站点密钥和密钥，或交由 .env 提供"
+            })
         return attrs
 
 

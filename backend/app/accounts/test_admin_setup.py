@@ -7,7 +7,7 @@ from rest_framework.test import APIClient
 
 from app.accounts.authentication import AUTH_COOKIE_NAME
 from app.accounts.models import SiteSettings, User, VisitLog
-from app.accounts.turnstile import turnstile_settings
+from app.accounts.turnstile import turnstile_public_config, turnstile_settings
 from app.settings import ADMIN_USERNAME, FREE_ACCOUNT_USERNAME
 
 
@@ -164,6 +164,46 @@ class TurnstileSettingsTests(TestCase):
             self.save({"turnstile_site_key": "panel-site", "turnstile_secret_key": "panel-secret"})
             config = turnstile_settings()
         self.assertTrue(config["enabled"])
+
+    def test_panel_switch_off_overrides_the_environment_pair(self):
+        self.save({"turnstile_site_key": "panel-site", "turnstile_secret_key": "panel-secret"})
+
+        with self.env_enabled():
+            response = self.save({"turnstile_enabled": False})
+            config = turnstile_settings()
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertFalse(config["enabled"])
+        self.assertFalse(turnstile_public_config()["turnstile_enabled"])
+
+    def test_untouched_panel_defaults_still_honour_the_environment(self):
+        with self.env_enabled():
+            config = turnstile_settings()
+        self.assertTrue(config["enabled"])
+        self.assertEqual(config["source"], "env")
+
+    def test_switch_on_without_any_pair_is_rejected(self):
+        with self.env_enabled(False):
+            response = self.save({"turnstile_enabled": True})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("turnstile_site_key", response.data)
+
+    def test_switch_on_falls_back_to_the_environment_pair(self):
+        with self.env_enabled():
+            response = self.save({"turnstile_enabled": True})
+            config = turnstile_settings()
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual((config["site_key"], config["source"]), ("env-site", "env"))
+
+    def test_switch_state_round_trips_through_the_api(self):
+        with self.env_enabled():
+            self.save({"turnstile_enabled": False, "turnstile_site_key": "", "turnstile_secret_key": ""})
+            response = self.client.get("/0x/user/turnstile-config")
+
+        self.assertFalse(response.data["turnstile_enabled"])
+        self.assertTrue(response.data["env_enabled"])
 
     def test_site_key_without_a_secret_is_rejected(self):
         response = self.save({"turnstile_site_key": "panel-site"})

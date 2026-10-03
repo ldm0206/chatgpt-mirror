@@ -11,7 +11,9 @@ from django.middleware.csrf import get_token
 from app.accounts.models import SiteSettings, VisitLog
 from app.accounts.oidc import oidc_public_config
 from app.accounts.serializers import TurnstileSettingsSerializer
-from app.accounts.turnstile import turnstile_public_config, turnstile_settings
+from app.accounts.turnstile import (
+    turnstile_env_configured, turnstile_public_config, turnstile_settings,
+)
 from app.permissions import IsSuperUser
 from app.settings import SHOW_GITHUB
 from app.utils import req_gateway, get_client_ip, get_request_subject
@@ -43,14 +45,18 @@ class VersionConfig(APIView):
 class TurnstileSettingsView(APIView):
     permission_classes = (IsAuthenticated, IsSuperUser)
 
-    def get(self, request):
-        config, _ = SiteSettings.objects.get_or_create(pk=1)
-        active = turnstile_settings()
-        return Response({
+    def payload(self, config, active):
+        return {
             **TurnstileSettingsSerializer(config).data,
             "active_source": active["source"],
             "active_enabled": active["enabled"],
-        })
+            "env_enabled": turnstile_env_configured(),
+        }
+
+    def get(self, request):
+        config, _ = SiteSettings.objects.get_or_create(pk=1)
+        active = turnstile_settings()
+        return Response(self.payload(config, active))
 
     def put(self, request):
         config, _ = SiteSettings.objects.get_or_create(pk=1)
@@ -68,9 +74,7 @@ class TurnstileSettingsView(APIView):
         active = turnstile_settings()
         return Response({
             "message": "人机验证配置已保存",
-            **TurnstileSettingsSerializer(config).data,
-            "active_source": active["source"],
-            "active_enabled": active["enabled"],
+            **self.payload(config, active),
         })
 
 

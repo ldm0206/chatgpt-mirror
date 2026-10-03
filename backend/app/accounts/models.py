@@ -41,8 +41,12 @@ class User(AbstractUser):
 
 
 class SiteSettings(models.Model):
-    # One installation-wide row. Empty Turnstile keys hand the pair back to the environment.
+    # One installation-wide row.
+    #
+    # `turnstile_enabled` defaults to True so an untouched panel still honours the
+    # environment: only an explicit save of False overrides an environment pair.
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    turnstile_enabled = models.BooleanField(default=True)
     turnstile_site_key = models.CharField(max_length=256, blank=True, default="")
     turnstile_secret_key = EncryptedTextField(blank=True, default="")
     # Empty OIDC triple likewise hands the provider back to the environment.
