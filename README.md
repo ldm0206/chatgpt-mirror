@@ -291,6 +291,7 @@ docker compose exec django python manage.py install_egress_guard --allow-host ex
 - 上游账号支持批量绑定代理节点，并按使用热度排序节点
 - 用容器内常驻调度进程替换此前在 Docker 中从未生效的 django-crontab，并新增每日过期数据清理
 - 修复：缺少 User-Agent 时写入访问日志会触发数据库约束错误
+- 修复：OIDC 流程状态改存服务端（原来靠流程 Cookie，网关只放行自带 Cookie 时登录会一直报「登录会话已失效」）
 
 ### 2026-09
 

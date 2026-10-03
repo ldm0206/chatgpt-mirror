@@ -2,12 +2,12 @@
 import json
 from datetime import timedelta
 from unittest.mock import Mock, patch
+from urllib.parse import parse_qsl, urlsplit
 
 import jwt
 import requests
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from django.core import signing
 from django.core.cache import cache
 from django.test import TestCase
 from django.utils import timezone
@@ -16,8 +16,7 @@ from rest_framework.test import APIClient
 
 from app.accounts import oidc
 from app.accounts.authentication import AUTH_COOKIE_NAME
-from app.accounts.models import GatewayRevocation, OidcIdentity, SiteSettings, User, VisitLog
-from app.accounts.views.oidc import STATE_COOKIE_NAME
+from app.accounts.models import GatewayRevocation, OidcFlow, OidcIdentity, SiteSettings, User, VisitLog
 from app.settings import ADMIN_USERNAME, FREE_ACCOUNT_USERNAME
 
 
@@ -123,14 +122,17 @@ class OidcTestCase(TestCase):
     def start_flow(self):
         response = self.client.get("/0x/user/oidc/login")
         self.assertEqual(response.status_code, 200)
-        flow = signing.loads(response.cookies[STATE_COOKIE_NAME].value, salt=oidc.STATE_SALT)
-        self.nonce = flow["nonce"]
-        return flow, response
+        params = dict(parse_qsl(urlsplit(response.data["authorize_url"]).query))
+        # The nonce lives server-side now; read it back the same way the callback does.
+        self.nonce = oidc.load_flow(params["state"])["nonce"]
+        return {"state": params["state"], "redirect_uri": params["redirect_uri"]}, response
 
-    def callback(self, flow, code="auth-code", state=None):
+    def callback(self, flow, code="auth-code", state=None, user_agent=None):
+        extra = {"HTTP_USER_AGENT": user_agent} if user_agent else {}
         return self.client.get(
             "/0x/user/oidc/callback",
             {"code": code, "state": state if state is not None else flow["state"]},
+            **extra,
         )
 
     def login_through_provider(self):
@@ -143,7 +145,7 @@ class OidcLoginViewTests(OidcTestCase):
         response = self.client.get("/0x/user/oidc/login")
         self.assertEqual(response.status_code, 400)
 
-    def test_login_returns_authorize_url_and_state_cookie(self):
+    def test_login_registers_the_flow_and_returns_authorize_url(self):
         self.enable_oidc()
         flow, response = self.start_flow()
 
@@ -158,10 +160,9 @@ class OidcLoginViewTests(OidcTestCase):
         ):
             self.assertIn(fragment, authorize_url)
 
-        cookie = response.cookies[STATE_COOKIE_NAME]
-        self.assertEqual(cookie["path"], "/0x/user/oidc/")
-        self.assertEqual(cookie["samesite"], "Lax")
-        self.assertTrue(cookie["httponly"])
+        # The flow is stored server-side: no cookie travels through the provider redirect.
+        self.assertEqual(OidcFlow.objects.count(), 1)
+        self.assertEqual(response.cookies, {})
         self.assertIn("state=" + flow["state"], authorize_url)
         self.assertEqual(flow["redirect_uri"], "http://testserver/0x/user/oidc/callback")
 
@@ -180,24 +181,39 @@ class OidcCallbackStateTests(OidcTestCase):
         self.enable_oidc()
         User.objects.create_user(username="alice", password="test-password")
 
-    def test_callback_without_state_cookie_is_refused(self):
-        flow, _ = self.start_flow()
-        del self.client.cookies[STATE_COOKIE_NAME]
-        response = self.callback(flow)
+    def test_callback_without_a_state_is_refused(self):
+        self.start_flow()
+        response = self.client.get("/0x/user/oidc/callback", {"code": "auth-code"})
         self.assertEqual(response.status_code, 302)
         self.assertIn("oidc_error=state", response["Location"])
         self.assertFalse(Token.objects.exists())
 
-    def test_callback_with_mismatched_state_is_refused(self):
-        flow, _ = self.start_flow()
-        response = self.callback(flow, state="different")
+    def test_callback_with_unknown_state_is_refused(self):
+        self.start_flow()
+        response = self.client.get(
+            "/0x/user/oidc/callback", {"code": "auth-code", "state": "different"},
+        )
         self.assertIn("oidc_error=state", response["Location"])
         self.assertFalse(OidcIdentity.objects.exists())
 
-    def test_callback_with_expired_state_cookie_is_refused(self):
+    def test_callback_with_expired_flow_is_refused(self):
         flow, _ = self.start_flow()
-        with patch.object(oidc, "STATE_MAX_AGE_SECONDS", -1):
-            response = self.callback(flow)
+        OidcFlow.objects.update(expires_at=timezone.now() - timedelta(seconds=1))
+        response = self.callback(flow)
+        self.assertIn("oidc_error=state", response["Location"])
+        self.assertFalse(OidcFlow.objects.exists())
+
+    def test_callback_from_another_browser_is_refused(self):
+        flow, _ = self.start_flow()
+        response = self.callback(flow, user_agent="OtherBrowser/1.0")
+        self.assertIn("oidc_error=state", response["Location"])
+        self.assertFalse(OidcIdentity.objects.exists())
+
+    def test_flow_is_single_use(self):
+        flow, _ = self.start_flow()
+        self.callback(flow, code="bad-code")
+        self.assertFalse(OidcFlow.objects.exists())
+        response = self.callback(flow)
         self.assertIn("oidc_error=state", response["Location"])
 
     def test_provider_error_parameter_is_reported(self):

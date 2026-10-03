@@ -139,6 +139,20 @@ class OidcIdentity(models.Model):
         ]
 
 
+class OidcFlow(models.Model):
+    """One in-flight OIDC authorization, keyed by the digest of its state value.
+
+    Kept server-side because the gateway in front of the mirror only relays its own
+    cookie set, so a flow cookie would never come back from the provider redirect.
+    """
+
+    digest = models.CharField(max_length=64, primary_key=True)
+    payload = EncryptedTextField(blank=True, default="")
+    user_agent = models.CharField(max_length=256, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(db_index=True)
+
+
 class PendingLogin(models.Model):
     digest = models.CharField(max_length=64, primary_key=True)
     user = models.ForeignKey(User, on_delete=models.CASCADE)

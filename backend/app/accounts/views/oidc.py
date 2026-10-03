@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
 import logging
 
-from django.conf import settings
 from django.db import transaction
 from django.http import HttpResponseRedirect
 from django.middleware.csrf import get_token, rotate_token
 from django.utils import timezone
-from django.utils.crypto import constant_time_compare
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -23,8 +21,6 @@ from app.utils import get_client_ip, save_visit_log
 
 logger = logging.getLogger("default")
 
-STATE_COOKIE_NAME = "oidc_state"
-STATE_COOKIE_PATH = "/0x/user/oidc/"
 LOGIN_PAGE = "/admin/#/login"
 ADMIN_HOME = "/admin/#/account/user"
 USER_HOME = "/admin/#/login-chatgpt"
@@ -55,7 +51,7 @@ def _error_message(code):
 
 
 class OidcLoginView(APIView):
-    """Hands the browser an authorize URL plus the signed flow cookie to come back with."""
+    """Hands the browser an authorize URL for a flow registered at this server."""
 
     authentication_classes = ()
     throttle_classes = (OidcLoginThrottle,)
@@ -70,21 +66,11 @@ class OidcLoginView(APIView):
         except oidc.OidcError as error:
             raise ValidationError({"message": _error_message(error.code)})
 
-        flow = oidc.new_flow_state(redirect_uri)
-        response = Response({
+        flow = oidc.create_flow(redirect_uri, request.headers.get("User-Agent", ""))
+        return Response({
             "authorize_url": oidc.build_authorize_url(config, document, flow),
             "display_name": config["display_name"],
         })
-        response.set_cookie(
-            STATE_COOKIE_NAME,
-            oidc.dump_flow_state(flow),
-            max_age=oidc.STATE_MAX_AGE_SECONDS,
-            httponly=True,
-            secure=settings.SESSION_COOKIE_SECURE,
-            samesite="Lax",
-            path=STATE_COOKIE_PATH,
-        )
-        return response
 
 
 class OidcCallbackView(APIView):
@@ -95,14 +81,13 @@ class OidcCallbackView(APIView):
 
     def get(self, request):
         config = oidc.oidc_settings()
+        state = str(request.query_params.get("state") or "")
         try:
             if not config["enabled"]:
                 raise oidc.OidcError("disabled")
             if request.query_params.get("error") or not request.query_params.get("code"):
                 raise oidc.OidcError("provider")
-            flow = oidc.load_flow_state(request.COOKIES.get(STATE_COOKIE_NAME, ""))
-            if not constant_time_compare(flow["state"], str(request.query_params.get("state") or "")):
-                raise oidc.OidcError("state")
+            flow = oidc.load_flow(state, request.headers.get("User-Agent", ""))
 
             document = oidc.discovery(config)
             tokens = oidc.exchange_code(config, document, flow, request.query_params["code"])
@@ -121,6 +106,7 @@ class OidcCallbackView(APIView):
                 raise oidc.OidcError("expired")
         except oidc.OidcError as error:
             logger.warning("oidc login failed (%s) from %s", error.code, get_client_ip(request))
+            oidc.delete_flow(state)
             return self._redirect_to_login(error.code)
 
         with transaction.atomic():
@@ -138,15 +124,13 @@ class OidcCallbackView(APIView):
 
         destination = ADMIN_HOME if (user.is_staff or user.is_superuser) else USER_HOME
         logger.info("oidc login: user=%s ip=%s", user.username, get_client_ip(request))
+        oidc.delete_flow(state)
         response = HttpResponseRedirect(destination)
         set_auth_cookie(response, token)
-        response.delete_cookie(STATE_COOKIE_NAME, path=STATE_COOKIE_PATH, samesite="Lax")
         return response
 
     def _redirect_to_login(self, code):
-        response = HttpResponseRedirect(f"{LOGIN_PAGE}?oidc_error={code}")
-        response.delete_cookie(STATE_COOKIE_NAME, path=STATE_COOKIE_PATH, samesite="Lax")
-        return response
+        return HttpResponseRedirect(f"{LOGIN_PAGE}?oidc_error={code}")
 
 
 class OidcSettingsView(APIView):

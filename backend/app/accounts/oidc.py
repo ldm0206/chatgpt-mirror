@@ -2,28 +2,29 @@
 """OIDC relying-party plumbing: config resolution, discovery, tokens, user binding."""
 import base64
 import hashlib
+import json
 import logging
 import re
 import secrets
+from datetime import timedelta
 from urllib.parse import urlencode, urlsplit
 
 import jwt
 import requests
 from django.conf import settings
-from django.core import signing
 from django.core.cache import cache
-from django.core.signing import BadSignature, SignatureExpired
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 from django.utils.crypto import constant_time_compare
 
-from app.accounts.models import OidcIdentity, SiteSettings, User
+from app.accounts.models import OidcFlow, OidcIdentity, SiteSettings, User
+from app.accounts.session_authority import digest
 from app.settings import ADMIN_USERNAME, FREE_ACCOUNT_USERNAME
 
 logger = logging.getLogger("default")
 
 
-STATE_SALT = "chatgpt-mirror.oidc-state.v1"
-STATE_MAX_AGE_SECONDS = 600
+STATE_MAX_AGE_SECONDS = 900
 DISCOVERY_CACHE_SECONDS = 3600
 HTTP_TIMEOUT_SECONDS = 5
 CLOCK_SKEW_SECONDS = 60
@@ -244,35 +245,60 @@ def verify_id_token(config, document, id_token, nonce):
     return claims
 
 
-def new_flow_state(redirect_uri):
+def create_flow(redirect_uri, user_agent=""):
+    """Register one authorization attempt server-side and return its public parameters."""
     code_verifier = secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(
         hashlib.sha256(code_verifier.encode("ascii")).digest()
     ).rstrip(b"=").decode("ascii")
-    return {
+    flow = {
         "state": secrets.token_urlsafe(32),
         "nonce": secrets.token_urlsafe(32),
         "code_verifier": code_verifier,
         "code_challenge": challenge,
         "redirect_uri": redirect_uri,
     }
+    now = timezone.now()
+    OidcFlow.objects.filter(expires_at__lte=now).delete()
+    OidcFlow.objects.create(
+        digest=digest(flow["state"]),
+        payload=json.dumps({key: flow[key] for key in ("nonce", "code_verifier", "redirect_uri")}),
+        user_agent=str(user_agent or "")[:256],
+        expires_at=now + timedelta(seconds=STATE_MAX_AGE_SECONDS),
+    )
+    return flow
 
 
-def dump_flow_state(payload):
-    return signing.dumps(payload, salt=STATE_SALT, compress=True)
-
-
-def load_flow_state(raw):
+def load_flow(state, user_agent=""):
+    """Stored parameters for this state, or OidcError('state') with the reason logged."""
+    if not isinstance(state, str) or not state:
+        logger.warning("oidc callback carried no state parameter")
+        raise OidcError("state")
+    flow = OidcFlow.objects.filter(digest=digest(state)).first()
+    if flow is None:
+        logger.warning("oidc flow not found for the presented state")
+        raise OidcError("state")
+    if flow.expires_at <= timezone.now():
+        flow.delete()
+        logger.warning("oidc flow expired before the provider returned")
+        raise OidcError("state")
+    if not constant_time_compare(flow.user_agent, str(user_agent or "")[:256]):
+        logger.warning("oidc flow was started from a different browser")
+        raise OidcError("state")
     try:
-        payload = signing.loads(raw or "", salt=STATE_SALT, max_age=STATE_MAX_AGE_SECONDS)
-    except (BadSignature, SignatureExpired):
+        payload = json.loads(flow.payload or "{}")
+    except ValueError:
         raise OidcError("state")
-    if not isinstance(payload, dict):
-        raise OidcError("state")
-    for field in ("state", "nonce", "code_verifier", "code_challenge", "redirect_uri"):
+    for field in ("nonce", "code_verifier", "redirect_uri"):
         if not isinstance(payload.get(field), str) or not payload[field]:
+            logger.warning("oidc flow payload is incomplete")
             raise OidcError("state")
     return payload
+
+
+def delete_flow(state):
+    if isinstance(state, str) and state:
+        OidcFlow.objects.filter(digest=digest(state)).delete()
 
 
 def build_authorize_url(config, document, flow):
