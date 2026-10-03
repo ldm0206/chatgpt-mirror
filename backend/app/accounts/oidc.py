@@ -2,6 +2,7 @@
 """OIDC relying-party plumbing: config resolution, discovery, tokens, user binding."""
 import base64
 import hashlib
+import logging
 import re
 import secrets
 from urllib.parse import urlencode, urlsplit
@@ -17,6 +18,8 @@ from django.utils.crypto import constant_time_compare
 
 from app.accounts.models import OidcIdentity, SiteSettings, User
 from app.settings import ADMIN_USERNAME, FREE_ACCOUNT_USERNAME
+
+logger = logging.getLogger("default")
 
 
 STATE_SALT = "chatgpt-mirror.oidc-state.v1"
@@ -133,14 +136,21 @@ def discovery(config):
         )
         response.raise_for_status()
         document = response.json()
-    except (requests.RequestException, ValueError):
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("oidc discovery failed for %s: %s", issuer, exc)
         raise OidcError("provider")
 
     if not isinstance(document, dict) or str(document.get("issuer") or "").rstrip("/") != issuer:
+        logger.warning(
+            "oidc issuer mismatch: configured %r, discovery document reports %r",
+            issuer,
+            document.get("issuer") if isinstance(document, dict) else document,
+        )
         raise OidcError("provider")
     for field in ("authorization_endpoint", "token_endpoint", "jwks_uri"):
         endpoint = str(document.get(field) or "")
         if not endpoint.startswith(("http://", "https://")):
+            logger.warning("oidc discovery document has an unusable %s: %r", field, endpoint)
             raise OidcError("provider")
 
     cache.set(cache_key, document, DISCOVERY_CACHE_SECONDS)
@@ -159,9 +169,11 @@ def _jwks(document, *, refresh=False):
         response = requests.get(uri, headers={"Accept": "application/json"}, timeout=HTTP_TIMEOUT_SECONDS)
         response.raise_for_status()
         payload = response.json()
-    except (requests.RequestException, ValueError):
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("oidc jwks fetch failed for %s: %s", uri, exc)
         raise OidcError("provider")
     if not isinstance(payload, dict) or not isinstance(payload.get("keys"), list):
+        logger.warning("oidc jwks payload from %s is malformed", uri)
         raise OidcError("provider")
 
     cache.set(cache_key, payload, DISCOVERY_CACHE_SECONDS)
@@ -179,11 +191,15 @@ def _signing_key(document, kid, algorithm):
         if candidates:
             break
     else:
+        logger.warning(
+            "oidc id_token signing key %r not found in %s", kid, document.get("jwks_uri"),
+        )
         raise OidcError("token")
 
     try:
         return jwt.PyJWK(candidates[0], algorithm=algorithm).key
-    except (jwt.PyJWTError, KeyError, ValueError, TypeError):
+    except (jwt.PyJWTError, KeyError, ValueError, TypeError) as exc:
+        logger.warning("oidc jwks key %r is unusable for %s: %s", kid, algorithm, exc)
         raise OidcError("token")
 
 
@@ -193,10 +209,12 @@ def verify_id_token(config, document, id_token, nonce):
 
     try:
         header = jwt.get_unverified_header(id_token)
-    except jwt.PyJWTError:
+    except jwt.PyJWTError as exc:
+        logger.warning("oidc id_token header is unreadable: %s", exc)
         raise OidcError("token")
     algorithm = header.get("alg")
     if algorithm not in algorithms:
+        logger.warning("oidc id_token algorithm %r is not allowed (allowed: %s)", algorithm, algorithms)
         raise OidcError("token")
 
     key = _signing_key(document, header.get("kid"), algorithm)
@@ -212,13 +230,16 @@ def verify_id_token(config, document, id_token, nonce):
             leeway=CLOCK_SKEW_SECONDS,
             options={"require": ["exp", "iat", "aud", "iss", "sub"]},
         )
-    except jwt.PyJWTError:
+    except jwt.PyJWTError as exc:
+        logger.warning("oidc id_token rejected: %s", exc)
         raise OidcError("token")
 
     if not constant_time_compare(str(claims.get("nonce") or ""), str(nonce)):
+        logger.warning("oidc id_token nonce does not match the flow")
         raise OidcError("token")
     authorized_party = claims.get("azp")
     if authorized_party and authorized_party != config["client_id"]:
+        logger.warning("oidc id_token azp %r does not match the configured client", authorized_party)
         raise OidcError("token")
     return claims
 
@@ -293,15 +314,26 @@ def exchange_code(config, document, flow, code):
         )
         response.raise_for_status()
     except requests.RequestException as exc:
-        if getattr(exc, "response", None) is None:
+        failed = getattr(exc, "response", None)
+        if failed is None:
+            logger.warning("oidc token endpoint unreachable: %s", exc)
             raise OidcError("provider")
+        detail = ""
+        try:
+            body = failed.json()
+            detail = " error=%r description=%r" % (body.get("error"), body.get("error_description"))
+        except (ValueError, AttributeError):
+            pass
+        logger.warning("oidc token exchange rejected: HTTP %s%s", failed.status_code, detail)
         raise OidcError("token")
 
     try:
         payload = response.json()
-    except ValueError:
+    except ValueError as exc:
+        logger.warning("oidc token endpoint returned invalid JSON: %s", exc)
         raise OidcError("provider")
     if not isinstance(payload, dict) or not payload.get("id_token"):
+        logger.warning("oidc token response carries no id_token")
         raise OidcError("token")
     return payload
 

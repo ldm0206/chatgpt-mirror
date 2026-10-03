@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+import logging
+
 from django.conf import settings
 from django.db import transaction
 from django.http import HttpResponseRedirect
@@ -16,8 +18,10 @@ from app.accounts.models import SiteSettings
 from app.accounts.serializers import OidcSettingsSerializer
 from app.accounts.views.login import LoginIpRateThrottle, issue_user_token
 from app.permissions import IsSuperUser
-from app.utils import save_visit_log
+from app.utils import get_client_ip, save_visit_log
 
+
+logger = logging.getLogger("default")
 
 STATE_COOKIE_NAME = "oidc_state"
 STATE_COOKIE_PATH = "/0x/user/oidc/"
@@ -116,6 +120,7 @@ class OidcCallbackView(APIView):
             if user.expired_date and user.expired_date <= timezone.localdate():
                 raise oidc.OidcError("expired")
         except oidc.OidcError as error:
+            logger.warning("oidc login failed (%s) from %s", error.code, get_client_ip(request))
             return self._redirect_to_login(error.code)
 
         with transaction.atomic():
@@ -132,6 +137,7 @@ class OidcCallbackView(APIView):
             get_token(request)
 
         destination = ADMIN_HOME if (user.is_staff or user.is_superuser) else USER_HOME
+        logger.info("oidc login: user=%s ip=%s", user.username, get_client_ip(request))
         response = HttpResponseRedirect(destination)
         set_auth_cookie(response, token)
         response.delete_cookie(STATE_COOKIE_NAME, path=STATE_COOKIE_PATH, samesite="Lax")
