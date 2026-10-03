@@ -442,10 +442,8 @@ const getVersionCfg = async () => {
 const readOidcError = () => {
   const code = String(route.query.oidc_error || '')
   if (!code) return
-  oidcError.value = OIDC_ERROR_MESSAGES[code] || '登录失败，请稍后重试'
-  const query = { ...route.query }
-  delete query.oidc_error
-  router.replace({ query })
+  // Keep the code in the address bar so it can be read out while troubleshooting.
+  oidcError.value = `${OIDC_ERROR_MESSAGES[code] || '登录失败，请稍后重试'}（${code}）`
 }
 
 const goOidc = async () => {
