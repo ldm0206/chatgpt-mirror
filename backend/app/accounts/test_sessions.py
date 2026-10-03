@@ -207,7 +207,8 @@ class SlotApiTests(TestCase):
         response = self.client.post("/0x/chatgpt/slot", {"action": "jump"}, format="json")
         self.assertEqual(response.status_code, 400)
 
-    @patch("app.chatgpt.views.chatgpt.req_gateway", return_value={"login_url": "https://example.com/chat"})
+    @patch("app.chatgpt.views.chatgpt.req_gateway_with_response",
+           return_value=({"login_url": "https://example.com/chat"}, None))
     def test_login_returns_queued_instead_of_a_url_when_full(self, _gateway):
         set_limits(max_active_sessions=1)
         admit("other", self.other, self.account)
@@ -222,7 +223,8 @@ class SlotApiTests(TestCase):
         self.assertNotIn("login_url", response.data)
         _gateway.assert_not_called()
 
-    @patch("app.chatgpt.views.chatgpt.req_gateway", return_value={"login_url": "https://example.com/chat"})
+    @patch("app.chatgpt.views.chatgpt.req_gateway_with_response",
+           return_value=({"login_url": "https://example.com/chat"}, None))
     def test_login_proceeds_when_a_seat_is_free(self, _gateway):
         response = self.client.post(
             "/0x/chatgpt/login", {"chatgpt_id": self.account.id, "login_mode": "api"}, format="json",
@@ -233,7 +235,8 @@ class SlotApiTests(TestCase):
         self.assertEqual(response.data["login_url"], "https://example.com/chat")
         self.assertEqual(slot_state("member")["state"], SessionSlot.STATE_ACTIVE)
 
-    @patch("app.chatgpt.views.chatgpt.req_gateway", return_value={"login_url": "https://example.com/chat"})
+    @patch("app.chatgpt.views.chatgpt.req_gateway_with_response",
+           return_value=({"login_url": "https://example.com/chat"}, None))
     def test_admins_are_not_queued(self, _gateway):
         set_limits(max_active_sessions=1)
         admit("other", self.other, self.account)

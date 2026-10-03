@@ -39,10 +39,12 @@ def save_state(state):
 class Handler(BaseHTTPRequestHandler):
     server_version = "MockGateway/1.0"
 
-    def _json(self, payload, code=200):
+    def _json(self, payload, code=200, cookies=()):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        for cookie in cookies:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -80,8 +82,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json(state)
             return
         if self.path == "/api/login":
-            # 本地没有真实镜像页面，用演示页充当 login_url 的落点
-            self._json({"login_url": "/admin/egress-demo.html"})
+            # 本地没有真实镜像页面，用演示页充当 login_url 的落点；附带一个演示会话
+            # Cookie，用来验证 Django 会把网关在登录时签发的 Cookie 透传给浏览器。
+            self._json(
+                {"login_url": "/admin/egress-demo.html"},
+                cookies=["mock_gateway_session=demo; Path=/; HttpOnly; SameSite=Strict"],
+            )
             return
         if self.path == "/api/diagnose-chatgpt-auth":
             # 本地演示凭据是假的，但让诊断始终报告可用

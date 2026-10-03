@@ -750,7 +750,8 @@ class SecurityRegressionTests(TestCase):
         ):
             self.assertNotIn(field, data)
 
-    @patch("app.chatgpt.views.chatgpt.req_gateway", return_value={"login_url": "/handoff"})
+    @patch("app.chatgpt.views.chatgpt.req_gateway_with_response",
+           return_value=({"login_url": "/handoff"}, None))
     def test_successful_gateway_login_increments_upstream_login_count(self, _req_gateway):
         account = ChatgptAccount.objects.create(
             chatgpt_username="login-count@example.com",
@@ -783,6 +784,51 @@ class SecurityRegressionTests(TestCase):
         account.refresh_from_db()
         self.assertEqual(response.status_code, 200)
         self.assertEqual(account.login_count, 4)
+
+    @patch("app.chatgpt.views.chatgpt.req_gateway_with_response")
+    def test_gateway_login_relays_its_session_cookies_to_the_browser(self, gateway):
+        account = ChatgptAccount.objects.create(
+            chatgpt_username="cookie-relay@example.com",
+            plan_type="plus",
+            access_token="secret-access",
+            access_token_valid=True,
+            created_time=1,
+            updated_time=1,
+        )
+        car = ChatgptCar.objects.create(
+            car_name="cookie-relay-car",
+            gpt_account_list=[account.id],
+            created_time=1,
+            updated_time=1,
+        )
+        user = User.objects.create_user(
+            username="cookie-relay-user",
+            password="Strong-password-123!",
+            gptcar_list=[car.id],
+        )
+        gateway_response = Mock()
+        gateway_response.raw.headers.getlist.return_value = [
+            "mirror_session=abc123; Path=/; Max-Age=3600; Secure; HttpOnly; SameSite=Strict"
+        ]
+        gateway.return_value = ({"login_url": "/handoff"}, gateway_response)
+
+        request = self.factory.post(
+            "/0x/chatgpt/login",
+            {"chatgpt_id": account.id, "login_mode": "api"},
+            format="json",
+            HTTP_USER_AGENT="test-browser",
+        )
+        force_authenticate(request, user=user)
+        response = ChatGPTLoginView.as_view()(request)
+
+        self.assertEqual(response.status_code, 200)
+        relayed = response.cookies["mirror_session"]
+        self.assertEqual(relayed.value, "abc123")
+        self.assertEqual(relayed["path"], "/")
+        self.assertEqual(str(relayed["max-age"]), "3600")
+        self.assertTrue(relayed["secure"])
+        self.assertTrue(relayed["httponly"])
+        self.assertEqual(relayed["samesite"], "Strict")
 
     def test_admin_can_reset_upstream_login_count(self):
         admin = User.objects.create_superuser(

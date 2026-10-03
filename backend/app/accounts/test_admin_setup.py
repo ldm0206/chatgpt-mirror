@@ -7,6 +7,7 @@ from rest_framework.test import APIClient
 
 from app.accounts.authentication import AUTH_COOKIE_NAME
 from app.accounts.models import SiteSettings, User, VisitLog
+from app.accounts.session_authority import GATEWAY_AUTH_COOKIE_NAME, authorization_is_active
 from app.accounts.turnstile import turnstile_public_config, turnstile_settings
 from app.settings import ADMIN_USERNAME, FREE_ACCOUNT_USERNAME
 
@@ -51,6 +52,9 @@ class AdminSetupTests(TestCase):
         self.assertTrue(response.data["is_admin"])
         self.assertEqual(response.data["username"], ADMIN_USERNAME)
         self.assertIn(AUTH_COOKIE_NAME, response.cookies)
+        self.assertTrue(
+            authorization_is_active(response.cookies[GATEWAY_AUTH_COOKIE_NAME].value, ADMIN_USERNAME)
+        )
 
         user = User.objects.get(username=ADMIN_USERNAME)
         self.assertTrue(user.is_superuser and user.is_staff and user.is_active)

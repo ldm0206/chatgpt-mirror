@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 from datetime import timedelta
+from http.cookies import SimpleCookie
 
 import requests
 from django.core import signing
@@ -51,7 +52,8 @@ def get_client_ip(request):
     return ""
 
 
-def issue_free_session():
+def create_free_session():
+    """Register a visitor session and return its (sid, signed cookie value)."""
     from app.accounts.models import User, VisitorSession
 
     sid = uuid.uuid4().hex
@@ -59,7 +61,11 @@ def issue_free_session():
         sid=sid, user=User.objects.get(username=FREE_ACCOUNT_USERNAME),
         expires_at=timezone.now() + timedelta(seconds=FREE_SESSION_MAX_AGE),
     )
-    return signing.dumps({"sid": sid}, salt=FREE_SESSION_SALT, compress=True)
+    return sid, signing.dumps({"sid": sid}, salt=FREE_SESSION_SALT, compress=True)
+
+
+def issue_free_session():
+    return create_free_session()[1]
 
 
 def get_request_subject(request):
@@ -86,7 +92,8 @@ def get_request_subject(request):
         raise ValidationError({"message": "免费访客会话已撤销，请重新进入"})
     return f"{FREE_ACCOUNT_USERNAME}:{sid}"
 
-def req_gateway(method, uri, *args, **kwargs):
+def req_gateway_with_response(method, uri, *args, **kwargs):
+    """req_gateway variant that also returns the raw response, e.g. to relay its cookies."""
     url = CHATGPT_GATEWAY_URL + uri
     headers = {
         "Authorization": "Bearer {}".format(GATEWAY_ADMIN_SECRET),
@@ -104,12 +111,61 @@ def req_gateway(method, uri, *args, **kwargs):
     if res.status_code != 200:
         try:
             err_msg = res.json()
-        except:
+        except Exception:
             err_msg = res.text
 
         raise ValidationError(err_msg)
 
-    return res.json()
+    return res.json(), res
+
+
+def req_gateway(method, uri, *args, **kwargs):
+    return req_gateway_with_response(method, uri, *args, **kwargs)[0]
+
+
+def forward_gateway_cookies(gateway_response, response):
+    """Relay the gateway's Set-Cookie headers to the browser.
+
+    Django talks to the gateway server-side, so a session cookie the gateway issues
+    during login would otherwise never reach the browser. The gateway fronts this
+    API on the same origin, so relayed cookies land on the host it serves.
+    """
+    values = []
+    raw_headers = getattr(getattr(gateway_response, "raw", None), "headers", None)
+    if raw_headers is not None and hasattr(raw_headers, "getlist"):
+        try:
+            values = [value for value in raw_headers.getlist("Set-Cookie") if value]
+        except Exception:
+            values = []
+    if not values:
+        single = gateway_response.headers.get("Set-Cookie") if gateway_response is not None else None
+        if single:
+            values = [single]
+
+    for header in values:
+        jar = SimpleCookie()
+        try:
+            jar.load(header)
+        except Exception:
+            # 透传是尽力而为：解析失败的 Cookie 丢掉，不影响登录本身。
+            continue
+        for morsel in jar.values():
+            max_age = morsel["max-age"]
+            try:
+                max_age = int(max_age) if max_age else None
+            except (TypeError, ValueError):
+                max_age = None
+            response.set_cookie(
+                morsel.key,
+                morsel.value,
+                max_age=max_age,
+                expires=morsel["expires"] or None,
+                path=morsel["path"] or "/",
+                domain=morsel["domain"] or None,
+                secure=bool(morsel["secure"]),
+                httponly=bool(morsel["httponly"]),
+                samesite=morsel["samesite"] or None,
+            )
 
 
 def clean_int_list(data_list):

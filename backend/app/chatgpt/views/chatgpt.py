@@ -14,7 +14,10 @@ from app.chatgpt.serializers import ShowChatgptTokenSerializer, AddChatgptTokenS
     RefreshChatgptTokenSerializer, ResetChatgptLoginCountSerializer, BatchProxyAssignmentSerializer
 from app.page import DefaultPageNumberPagination
 from app.settings import CHATGPT_GATEWAY_URL
-from app.utils import get_request_subject, save_visit_log, req_gateway
+from app.utils import (
+    forward_gateway_cookies, get_request_subject, req_gateway, req_gateway_with_response,
+    save_visit_log,
+)
 from app.accounts.models import SessionSlot, User
 from app.accounts.sessions import admit, queue_position, release, slot_state
 from app.accounts.session_authority import gateway_authorization, capability_aliases, account_model_policy
@@ -271,13 +274,16 @@ class ChatGPTLoginView(APIView):
         }
         payload.update(account_model_policy(request.user, chatgpt))
         # print(payload)
-        res_json = req_gateway("post", "/api/login", json=payload)
+        res_json, gateway_response = req_gateway_with_response("post", "/api/login", json=payload)
 
         ChatgptAccount.objects.filter(id=chatgpt.id).update(login_count=F("login_count") + 1)
 
         save_visit_log(request, "choose-gpt", chatgpt.chatgpt_username)
 
-        return Response(res_json)
+        # 网关在登录时给浏览器签发的会话 Cookie 随响应透传，否则它到不了浏览器。
+        response = Response(res_json)
+        forward_gateway_cookies(gateway_response, response)
+        return response
 
 
 class ChatGPTLoginCountResetView(APIView):

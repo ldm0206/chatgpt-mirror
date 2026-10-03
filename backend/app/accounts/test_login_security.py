@@ -3,6 +3,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from django.core import signing
 from django.core.cache import cache
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.db import transaction
@@ -14,13 +15,16 @@ from rest_framework.test import APIClient, APIRequestFactory
 
 from app.accounts.authentication import AUTH_COOKIE_NAME, ExpiringCookieTokenAuthentication, renew_session
 from app.accounts.models import PendingLogin, SessionAnchor, User, VisitorSession, GatewayRevocation, VisitLog
-from app.accounts.session_authority import authorization_is_active, gateway_authorization, authorization_details, authorization_version
+from app.accounts.session_authority import (
+    GATEWAY_AUTH_COOKIE_NAME, authorization_details, authorization_is_active,
+    authorization_version, gateway_authorization,
+)
 from app.accounts.views import revoke_user_sessions
 from app.accounts.views.login import (
     LOGIN_FAILURE_LIMIT, LoginAccountRateThrottle, LoginIpRateThrottle,
 )
 from app.settings import FREE_ACCOUNT_USERNAME
-from app.utils import get_request_subject, issue_free_session
+from app.utils import FREE_SESSION_SALT, get_request_subject, issue_free_session
 
 
 def turnstile_pair(enabled=True):
@@ -173,6 +177,33 @@ class LoginSecurityTests(TestCase):
         request = SimpleNamespace(user=user, auth=Token.objects.get(user=user),
                                   COOKIES={key: value.value for key, value in client.cookies.items()})
         return gateway_authorization(request), get_request_subject(request)
+
+    def test_confirm_issues_gateway_cookie_the_gateway_can_validate(self):
+        confirmed = self.login()
+        self.assertEqual(confirmed.status_code, 200, confirmed.data)
+        cookie = confirmed.cookies[GATEWAY_AUTH_COOKIE_NAME]
+        self.assertTrue(cookie["httponly"])
+        self.assertEqual(cookie["path"], "/")
+        self.assertEqual(cookie["samesite"], "Strict")
+        details = authorization_details(cookie.value, self.user.username)
+        self.assertIsNotNone(details)
+        self.assertTrue(details["active"])
+
+        # 退出登录清除这枚 Cookie，旧授权在服务端同时失效
+        response = self.post("/0x/user/logout")
+        self.assertEqual(response.cookies[GATEWAY_AUTH_COOKIE_NAME].value, "")
+        self.assertIsNone(authorization_details(cookie.value, self.user.username))
+
+    def test_free_confirm_issues_visitor_scoped_gateway_cookie(self):
+        User.objects.create_user(username=FREE_ACCOUNT_USERNAME, password="Free-password-123!")
+        confirmed = self.login(free=True)
+        self.assertEqual(confirmed.status_code, 200, confirmed.data)
+
+        sid = signing.loads(confirmed.cookies["free_session"].value, salt=FREE_SESSION_SALT)["sid"]
+        subject = f"{FREE_ACCOUNT_USERNAME}:{sid}"
+        cookie = confirmed.cookies[GATEWAY_AUTH_COOKIE_NAME]
+        self.assertTrue(authorization_is_active(cookie.value, subject))
+        self.assertFalse(authorization_is_active(cookie.value, FREE_ACCOUNT_USERNAME))
 
     def test_all_public_login_posts_require_csrf(self):
         for path in ("login", "register", "login-free", "login-confirm", "logout"):

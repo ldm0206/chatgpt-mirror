@@ -17,6 +17,7 @@ from rest_framework.test import APIClient
 from app.accounts import oidc
 from app.accounts.authentication import AUTH_COOKIE_NAME
 from app.accounts.models import GatewayRevocation, OidcFlow, OidcIdentity, SiteSettings, User, VisitLog
+from app.accounts.session_authority import GATEWAY_AUTH_COOKIE_NAME, authorization_is_active
 from app.settings import ADMIN_USERNAME, FREE_ACCOUNT_USERNAME
 
 
@@ -297,6 +298,8 @@ class OidcUserResolutionTests(OidcTestCase):
         self.assertEqual(identity.user, user)
         token = Token.objects.get(user=user)
         self.assertEqual(response.cookies[AUTH_COOKIE_NAME].value, token.key)
+        gateway_cookie = response.cookies[GATEWAY_AUTH_COOKIE_NAME].value
+        self.assertTrue(authorization_is_active(gateway_cookie, "alice"))
         self.assertTrue(VisitLog.objects.filter(username="alice", log_type="login").exists())
 
         self.client.cookies[AUTH_COOKIE_NAME] = token.key

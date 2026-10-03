@@ -13,6 +13,7 @@ from app.accounts.models import User, VisitLog, PendingLogin, SessionSlot, Visit
 from app.accounts.sessions import promote_waiting
 from app.accounts.session_authority import (
     gateway_authorization, capability_aliases, account_model_policies_by_username,
+    set_gateway_auth_cookie,
 )
 from app.accounts.serializers import ShowVisitLogModelSerializer, AddUserAccountSerializer, UserBindChatGPTSerializer, \
     ShowUserAccountModelSerializer, BatchModelLimitSerializer, BatchUserActionSerializer, ChangePasswordSerializer
@@ -716,6 +717,10 @@ class ChangePasswordView(APIView):
             "csrf_token": get_token(request),
         })
         set_auth_cookie(response, token)
+        try:
+            set_gateway_auth_cookie(response, request.user, token, get_request_subject(request))
+        except ValidationError:
+            pass
         return response
 
 

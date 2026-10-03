@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from app.accounts.authentication import ExpiringCookieTokenAuthentication, set_auth_cookie
+from app.accounts.session_authority import set_gateway_auth_cookie
 from app.accounts.models import User
 from app.accounts.serializers import AdminSetupSerializer
 from app.accounts.turnstile import turnstile_public_config
@@ -76,4 +77,5 @@ class AdminSetupView(APIView):
                 "csrf_token": get_token(request),
             })
             set_auth_cookie(response, token)
+            set_gateway_auth_cookie(response, user, token, user.username)
             return response

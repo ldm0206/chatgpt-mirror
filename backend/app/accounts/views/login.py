@@ -20,7 +20,9 @@ from rest_framework.views import APIView
 
 from app.accounts.models import User, PendingLogin, VisitorSession
 from app.accounts.authentication import AUTH_COOKIE_NAME, ExpiringCookieTokenAuthentication, clear_auth_cookie, set_auth_cookie
-from app.accounts.session_authority import digest
+from app.accounts.session_authority import (
+    clear_gateway_auth_cookie, digest, set_gateway_auth_cookie,
+)
 from app.accounts.sessions import release as release_slot
 from app.accounts.turnstile import turnstile_settings
 from django.core import signing
@@ -29,7 +31,7 @@ from app.accounts.serializers import UserRegisterSerializer
 from app.chatgpt.models import ChatgptAccount
 from app.settings import ADMIN_USERNAME, FREE_ACCOUNT_USERNAME
 from app.settings import ALLOW_REGISTER
-from app.utils import get_client_ip, get_request_subject, issue_free_session, save_visit_log, req_gateway
+from app.utils import FREE_SESSION_MAX_AGE, create_free_session, get_client_ip, get_request_subject, save_visit_log, req_gateway
 
 
 TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
@@ -232,11 +234,16 @@ class ConfirmLogin(APIView):
             })
             set_auth_cookie(response, token)
             if ticket.visitor:
+                sid, signed_session = create_free_session()
                 response.set_cookie(
-                    "free_session", issue_free_session(), max_age=7 * 24 * 60 * 60,
+                    "free_session", signed_session, max_age=FREE_SESSION_MAX_AGE,
                     httponly=True, secure=settings.SESSION_COOKIE_SECURE,
                     samesite="Strict", path="/",
                 )
+                # The fresh visitor sid is not in the request yet, so name the subject directly.
+                set_gateway_auth_cookie(response, user, token, f"{user.username}:{sid}")
+            else:
+                set_gateway_auth_cookie(response, user, token, user.username)
             return response
 
 
@@ -273,6 +280,7 @@ class AccountLogout(APIView):
         response = Response({"message": "退出成功", "gateway_cleanup_pending": cleanup_pending})
         response.delete_cookie("free_session", path="/", samesite="Strict")
         clear_auth_cookie(response)
+        clear_gateway_auth_cookie(response)
         return response
 
 

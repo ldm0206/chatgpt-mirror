@@ -12,6 +12,7 @@ from rest_framework.views import APIView
 
 from app.accounts import oidc
 from app.accounts.authentication import set_auth_cookie
+from app.accounts.session_authority import set_gateway_auth_cookie
 from app.accounts.models import SiteSettings
 from app.accounts.serializers import OidcSettingsSerializer
 from app.accounts.views.login import LoginIpRateThrottle, issue_user_token
@@ -127,6 +128,8 @@ class OidcCallbackView(APIView):
         oidc.delete_flow(state)
         response = HttpResponseRedirect(destination)
         set_auth_cookie(response, token)
+        # OIDC 账号从不绑定免费共享账号，主体就是用户名本身。
+        set_gateway_auth_cookie(response, user, token, user.username)
         return response
 
     def _redirect_to_login(self, code):

@@ -14,6 +14,10 @@ from rest_framework.views import APIView
 from app.accounts.models import VisitorSession
 
 AUTHORIZATION_SALT = "mirror.gateway-authorization.v1"
+# Site-wide cookie holding the signed gateway lease: the browser presents it to the
+# gateway on every path (including /chat), and the gateway validates it with the
+# gateway-authorization endpoint below, the same check it already runs for login_url.
+GATEWAY_AUTH_COOKIE_NAME = "mirror_gateway_auth"
 
 
 def digest(value):
@@ -86,16 +90,38 @@ def authorization_version(user, token):
     return digest(f"{user.pk}:{user.authorization_version}:{digest(token)}")
 
 
+def gateway_authorization_value(user, token_key, subject):
+    return signing.dumps({
+        "user_id": user.pk,
+        "subject": subject,
+        "token_digest": digest(token_key),
+        "policy_digest": policy_digest(user),
+        "version": authorization_version(user, token_key),
+    }, salt=AUTHORIZATION_SALT)
+
+
 def gateway_authorization(request):
     from app.utils import get_request_subject
 
-    return signing.dumps({
-        "user_id": request.user.pk,
-        "subject": get_request_subject(request),
-        "token_digest": digest(request.auth),
-        "policy_digest": policy_digest(request.user),
-        "version": authorization_version(request.user, request.auth),
-    }, salt=AUTHORIZATION_SALT)
+    return gateway_authorization_value(
+        request.user, str(request.auth), get_request_subject(request),
+    )
+
+
+def set_gateway_auth_cookie(response, user, token, subject):
+    response.set_cookie(
+        GATEWAY_AUTH_COOKIE_NAME,
+        gateway_authorization_value(user, token.key, subject),
+        max_age=settings.API_TOKEN_TTL_SECONDS,
+        httponly=True,
+        secure=settings.SESSION_COOKIE_SECURE,
+        samesite="Strict",
+        path="/",
+    )
+
+
+def clear_gateway_auth_cookie(response):
+    response.delete_cookie(GATEWAY_AUTH_COOKIE_NAME, path="/", samesite="Strict")
 
 
 def authorization_details(value, subject):
