@@ -53,6 +53,10 @@
   box-sizing: border-box;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 html,
 body,
 #app {
@@ -252,6 +256,10 @@ pre {
 .t-table td,
 .t-table th {
   border-color: var(--app-border);
+}
+
+.t-table tbody tr > td {
+  transition: background 0.15s ease;
 }
 
 .t-table tbody tr:hover > td {

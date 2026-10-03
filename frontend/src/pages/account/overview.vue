@@ -7,7 +7,13 @@
     </div>
     <t-loading :loading="loading">
       <div class="metric-grid">
-        <t-card v-for="metric in metrics" :key="metric.label" :bordered="false" class="metric-card">
+        <t-card
+          v-for="(metric, index) in metrics"
+          :key="metric.label"
+          :bordered="false"
+          class="metric-card"
+          :style="{ '--stagger': index }"
+        >
           <div class="metric-label">{{ metric.label }}</div>
           <div class="metric-value">{{ metric.value }}</div>
           <div class="metric-detail">{{ metric.detail }}</div>
@@ -241,7 +247,15 @@ const restoreBackup = async (event: Event) => {
 .overview { display: grid; gap: 20px; }
 .overview-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 20px; }
-.metric-card { min-height: 132px; }
+.metric-card {
+  min-height: 132px;
+  animation: metric-in 0.36s cubic-bezier(0.22, 0.9, 0.32, 1) backwards;
+  animation-delay: calc(var(--stagger, 0) * 55ms);
+}
+@keyframes metric-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
 .metric-label { color: var(--app-text-muted); font-size: 13px; }
 .metric-value { margin-top: 14px; color: var(--app-text); font-family: var(--app-font-serif); font-size: 34px; font-weight: 600; letter-spacing: 0; }
 .metric-detail { margin-top: 8px; color: var(--app-text-muted); font-size: 13px; }

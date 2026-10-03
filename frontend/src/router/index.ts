@@ -23,17 +23,20 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/login',
     name: 'Login',
-    component: () => import('@/pages/login/index.vue')
+    component: () => import('@/pages/login/index.vue'),
+    meta: { title: '登录' }
   },
   {
     path: '/register',
     name: 'Register',
-    component: () => import('@/pages/login/index.vue')
+    component: () => import('@/pages/login/index.vue'),
+    meta: { title: '注册' }
   },
   {
     path: '/login-chatgpt',
     name: 'LoginChatgpt',
-    component: () => import('@/pages/login/chatgpt.vue')
+    component: () => import('@/pages/login/chatgpt.vue'),
+    meta: { title: '选择账号' }
   },
   {
     path: '/account',
@@ -145,6 +148,12 @@ router.beforeEach(async (to, _from, next) => {
   } else {
     next()
   }
+})
+
+const SITE_NAME = 'ChatGPT Mirror'
+
+router.afterEach((to) => {
+  document.title = to.meta.title ? `${to.meta.title} · ${SITE_NAME}` : `${SITE_NAME} 管理面板`
 })
 
 export default router

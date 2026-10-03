@@ -2,7 +2,7 @@
   <div class="layout">
     <t-layout class="layout-shell">
       <t-aside class="sidebar" width="248px">
-        <div class="sidebar-brand">
+        <router-link class="sidebar-brand" :to="brandHome" aria-label="回到首页">
           <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
             <g stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
               <line x1="12" y1="2.6" x2="12" y2="21.4" />
@@ -15,7 +15,7 @@
             <span class="brand-name">ChatGPT Mirror</span>
             <span class="brand-caption">管理面板</span>
           </span>
-        </div>
+        </router-link>
         <t-menu
           class="nav-menu"
           :value="activeMenu"
@@ -72,7 +72,9 @@
       </t-aside>
       <t-layout class="workspace">
         <t-header class="header">
-          <h1>{{ pageTitle }}</h1>
+          <transition name="page-title" mode="out-in">
+            <h1 :key="pageTitle">{{ pageTitle }}</h1>
+          </transition>
           <div class="header-right">
             <t-dropdown :options="userOptions" @click="handleUserAction">
               <t-button class="user-button" variant="text">
@@ -85,7 +87,11 @@
         </t-header>
         <t-content class="content">
           <div class="content-inner">
-            <router-view />
+            <router-view v-slot="{ Component }">
+              <transition name="page" mode="out-in">
+                <component :is="Component" />
+              </transition>
+            </router-view>
           </div>
         </t-content>
       </t-layout>
@@ -122,6 +128,7 @@ onBeforeUnmount(() => {
 const activeMenu = computed(() => route.path)
 const username = computed(() => userStore.username || '管理员')
 const pageTitle = computed(() => String(route.meta.title || '管理'))
+const brandHome = computed(() => (userStore.isAdmin ? '/account/overview' : '/account/profile'))
 
 const userOptions = computed(() => {
   const options = [{ content: '退出登录', value: 'logout' }]
@@ -180,6 +187,12 @@ const handleUserAction = async (data: { value: string }) => {
   height: 64px;
   padding: 0 20px;
   border-bottom: 1px solid var(--app-border);
+  text-decoration: none;
+  transition: background 0.18s ease;
+}
+
+.sidebar-brand:hover {
+  background: rgba(255, 255, 255, 0.4);
 }
 
 .brand-mark {
@@ -187,6 +200,11 @@ const handleUserAction = async (data: { value: string }) => {
   width: 22px;
   height: 22px;
   color: var(--app-action);
+  transition: transform 0.35s cubic-bezier(0.22, 0.9, 0.32, 1);
+}
+
+.sidebar-brand:hover .brand-mark {
+  transform: rotate(45deg);
 }
 
 .brand-text {
@@ -219,11 +237,30 @@ const handleUserAction = async (data: { value: string }) => {
 }
 
 .nav-menu :deep(.t-menu__item) {
+  position: relative;
   height: 42px;
   margin-bottom: 2px;
   color: #5c574a;
   border-radius: 9px;
   transition: background 0.15s ease, color 0.15s ease;
+}
+
+.nav-menu :deep(.t-menu__item)::before {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 18px;
+  background: var(--app-action);
+  border-radius: 2px;
+  transform: translateY(-50%) scaleY(0);
+  transform-origin: center;
+  transition: transform 0.18s ease;
+  content: "";
+}
+
+.nav-menu :deep(.t-menu__item.t-is-active)::before {
+  transform: translateY(-50%) scaleY(1);
 }
 
 .nav-menu :deep(.t-menu__item:hover) {
@@ -301,6 +338,37 @@ const handleUserAction = async (data: { value: string }) => {
   width: 100%;
   max-width: 1200px;
   margin: 0 auto;
+}
+
+/* —— 页面切换与标题过渡 —— */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.page-title-enter-active,
+.page-title-leave-active {
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.page-title-enter-from {
+  opacity: 0;
+  transform: translateY(5px);
+}
+
+.page-title-leave-to {
+  opacity: 0;
+  transform: translateY(-5px);
 }
 
 @media (max-width: 900px) {

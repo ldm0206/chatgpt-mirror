@@ -1,7 +1,7 @@
 <template>
   <div class="pick-page">
     <header class="pick-top">
-      <div class="pick-brand">
+      <button type="button" class="pick-brand" aria-label="回到账号选择首页" @click="goHome">
         <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
           <g stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
             <line x1="12" y1="2.6" x2="12" y2="21.4" />
@@ -11,7 +11,7 @@
           </g>
         </svg>
         <span class="brand-name">ChatGPT Mirror</span>
-      </div>
+      </button>
       <nav class="pick-links">
         <router-link v-if="userStore.isAdmin" to="/account/overview" class="top-link">返回管理</router-link>
         <router-link v-else to="/account/profile" class="top-link">账户中心</router-link>
@@ -38,11 +38,12 @@
 
       <div class="cardgrid">
         <button
-          v-for="item in tableData"
+          v-for="(item, index) in tableData"
           :key="item.id"
           type="button"
           class="card"
           :class="{ 'card--off': !item.auth_status || !item.supported_login_modes.length }"
+          :style="{ '--stagger': Math.min(index, 12) }"
           :disabled="tableLoading"
           @click="onSelect(item.id)"
         >
@@ -316,6 +317,17 @@ const getUserChatGPTAccountList = async () => {
   tableVisible.value = true
 }
 
+const goHome = async () => {
+  if (route.path !== '/login-chatgpt') {
+    await router.push('/login-chatgpt')
+    return
+  }
+  // 已经在选号首页时，点 Logo 顺手刷新一遍账号列表
+  if (tableVisible.value && !tableLoading.value) {
+    await getUserChatGPTAccountList()
+  }
+}
+
 const doLogout = async () => {
   try {
     await userStore.logout()
@@ -449,16 +461,34 @@ const onSelect = async (chatgptId: number | null) => {
 }
 
 .pick-brand {
+  appearance: none;
   display: flex;
   align-items: center;
   gap: 9px;
   margin-right: auto;
+  padding: 6px 10px;
+  margin-left: -10px;
+  font: inherit;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 10px;
+  transition: background 0.18s ease;
+}
+
+.pick-brand:hover {
+  background: var(--app-surface-muted);
 }
 
 .brand-mark {
   width: 19px;
   height: 19px;
   color: var(--app-action);
+  transition: transform 0.35s cubic-bezier(0.22, 0.9, 0.32, 1);
+}
+
+.pick-brand:hover .brand-mark {
+  transform: rotate(45deg);
 }
 
 .brand-name {
@@ -517,6 +547,18 @@ const onSelect = async (chatgptId: number | null) => {
   align-items: flex-end;
   gap: 20px;
   margin: 52px 0 36px;
+  animation: rise-in 0.4s cubic-bezier(0.22, 0.9, 0.32, 1) both;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .pick-head-text {
@@ -568,6 +610,8 @@ const onSelect = async (chatgptId: number | null) => {
   border-radius: 16px;
   box-shadow: 0 1px 2px rgba(41, 38, 31, 0.04);
   transition: box-shadow 0.16s ease, transform 0.16s ease, border-color 0.16s ease;
+  animation: rise-in 0.36s cubic-bezier(0.22, 0.9, 0.32, 1) backwards;
+  animation-delay: calc(var(--stagger, 0) * 45ms);
 }
 
 .card:hover:not(:disabled) {

@@ -10,14 +10,16 @@
       </p>
 
       <header class="login-header">
-        <svg class="login-mark" viewBox="0 0 24 24" aria-hidden="true">
-          <g stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
-            <line x1="12" y1="2.6" x2="12" y2="21.4" />
-            <line x1="2.6" y1="12" x2="21.4" y2="12" />
-            <line x1="5.3" y1="5.3" x2="18.7" y2="18.7" />
-            <line x1="18.7" y1="5.3" x2="5.3" y2="18.7" />
-          </g>
-        </svg>
+        <router-link class="login-mark-link" to="/login" aria-label="回到登录首页">
+          <svg class="login-mark" viewBox="0 0 24 24" aria-hidden="true">
+            <g stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+              <line x1="12" y1="2.6" x2="12" y2="21.4" />
+              <line x1="2.6" y1="12" x2="21.4" y2="12" />
+              <line x1="5.3" y1="5.3" x2="18.7" y2="18.7" />
+              <line x1="18.7" y1="5.3" x2="5.3" y2="18.7" />
+            </g>
+          </svg>
+        </router-link>
         <h1 id="login-title">{{ headerTitle }}</h1>
         <p>{{ headerSubtitle }}</p>
       </header>
@@ -556,12 +558,27 @@ const goFree = async () => {
   min-height: 100dvh;
   padding: 48px 24px;
   color: var(--login-text);
-  background: var(--login-bg);
+  background:
+    radial-gradient(1100px 520px at 85% -12%, rgba(193, 95, 60, 0.07), transparent 62%),
+    radial-gradient(900px 480px at 6% 112%, rgba(82, 122, 91, 0.06), transparent 62%),
+    var(--login-bg);
 }
 
 .login-panel {
   width: 100%;
   max-width: 380px;
+  animation: login-in 0.45s cubic-bezier(0.22, 0.9, 0.32, 1) both;
+}
+
+@keyframes login-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .login-notice {
@@ -580,11 +597,22 @@ const goFree = async () => {
   text-align: center;
 }
 
+.login-mark-link {
+  display: inline-block;
+  margin-bottom: 18px;
+  border-radius: 10px;
+}
+
 .login-mark {
+  display: block;
   width: 34px;
   height: 34px;
-  margin-bottom: 18px;
   color: var(--login-action);
+  transition: transform 0.35s cubic-bezier(0.22, 0.9, 0.32, 1);
+}
+
+.login-mark-link:hover .login-mark {
+  transform: rotate(45deg);
 }
 
 .login-header h1 {
@@ -726,6 +754,7 @@ const goFree = async () => {
   color: #fbf7f0;
   background: #ac5232;
   border-color: #ac5232;
+  transform: translateY(-1px);
 }
 
 .login-button:active {
@@ -797,6 +826,7 @@ const goFree = async () => {
 .free-button:hover:not(:disabled) {
   background: #f3f0e6;
   border-color: var(--login-border-hover);
+  transform: translateY(-1px);
 }
 
 .free-button:active:not(:disabled) {

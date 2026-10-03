@@ -281,6 +281,8 @@ docker compose exec django python manage.py install_egress_guard --allow-host ex
 
 ### 2026-10
 
+- 网关认证支持 Cookie：每种登录方式（密码、OIDC、免费体验、初始化向导）成功即签发站点级签名授权 Cookie `mirror_gateway_auth`，网关可用现有 `gateway-authorization` 接口校验，撤销/改密/退出同步失效；`/api/login` 响应中网关签发的 `Set-Cookie` 现在会透传给浏览器
+- 管理台体验：页面标题随路由更新（不再是固定的「管理」），点击 Logo 回到首页，并补了一批 Claude 风格的过渡与入场动效
 - OIDC 单点登录：支持接入外部 Identity Provider（授权码 + PKCE，state/nonce 与 ID Token 签名校验），面板或 `.env` 配置，按用户名绑定既有用户、可自动开通新用户；自动绑定管理员账号需显式开启
 - 浏览器外联泄漏防护：新增 `install_egress_guard` 命令注入拦截脚本，阻断镜像页面直连官方/遥测端点，拦截记录进入访问日志（外联拦截）
 - 首次访问创建管理员向导：`ADMIN_PASSWORD` 留空时改由网页向导创建管理员
