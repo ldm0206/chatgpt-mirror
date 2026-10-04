@@ -61,7 +61,7 @@
             <span class="menu-label">访问与安全</span>
           </t-menu-item>
           <t-menu-item v-if="userStore.isAdmin" value="/account/political-moderation">
-            <template #icon><t-icon name="secured" /></template>
+            <template #icon><t-icon name="filter-off" /></template>
             <span class="menu-label">政治内容屏蔽</span>
           </t-menu-item>
           <t-menu-item v-if="!userStore.isAdmin" value="/account/profile">

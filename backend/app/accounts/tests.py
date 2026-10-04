@@ -861,7 +861,7 @@ class SecurityRegressionTests(TestCase):
         self.assertEqual(response.status_code, 200)
         row = response.data["results"][0]
         self.assertEqual(row["remark"], "主力 Plus 号")
-        self.assertEqual(row["chatgpt_flag"], "{:03}sha".format(account.id))
+        self.assertEqual(row["chatgpt_flag"], "sha{:03}".format(account.id))
 
     def test_admin_can_reset_upstream_login_count(self):
         admin = User.objects.create_superuser(

@@ -245,7 +245,7 @@ class ChatGPTLoginView(APIView):
                     "queued": True,
                     "position": queue_position(slot),
                     "queue_size": SessionSlot.objects.filter(state=SessionSlot.STATE_WAITING).count(),
-                    "chatgpt_flag": "{:03}{}".format(chatgpt.id, chatgpt.chatgpt_username[:3]),
+                    "chatgpt_flag": "{}{:03}".format(chatgpt.chatgpt_username[:3], chatgpt.id),
                     "message": "当前使用人数已达上限，已为你排队，轮到后会自动进入",
                 })
 
