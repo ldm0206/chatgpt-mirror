@@ -62,7 +62,7 @@
               {{ item.plan_type }}
             </span>
           </div>
-          <span class="card-name">{{ item.chatgpt_flag || `账号 ${item.id}` }}</span>
+          <span class="card-name">{{ displayName(item) }}</span>
           <span class="card-status" :class="{ live: item.auth_status && item.supported_login_modes.length }">
             <i></i>{{ item.auth_status && item.supported_login_modes.length ? '可用' : '不可用' }}
             <em>被登录 {{ item.login_count || 0 }} 次</em>
@@ -233,6 +233,7 @@ const loginBlocked = computed(() =>
 interface TableData {
   id: number
   chatgpt_flag: string
+  remark: string
   plan_type: string
   auth_status: boolean
   login_count: number
@@ -335,6 +336,10 @@ const doLogout = async () => {
     MessagePlugin.error(error.message || '退出未完成，请重试')
   }
   router.replace('/login')
+}
+
+const displayName = (item: TableData) => {
+  return (item.remark || '').trim() || item.chatgpt_flag || `账号 ${item.id}`
 }
 
 const supportsMode = (item: TableData, mode: 'api' | 'web') => {

@@ -135,6 +135,8 @@ class UserChatGPTAccountList(APIView):
                 "id": line.id,
                 "login_count": line.login_count,
                 "chatgpt_flag": "{:03}{}".format(line.id, line.chatgpt_username[:3]),
+                # 管理员在「上游账号」里写的备注，选号页优先展示它而不是脱敏代号
+                "remark": line.remark or "",
                 "plan_type": line.plan_type,
                 "auth_status": line.auth_status,
                 "access_token_valid": line.access_token_valid,

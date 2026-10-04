@@ -17,6 +17,7 @@ from app.accounts.views import (
     CustomScriptConfigView,
     GetMirrorToken,
     UserAccountView,
+    UserChatGPTAccountList,
     UserConversationStatisticsView,
     UserSessionRevokeView,
     VisitLogView,
@@ -829,6 +830,38 @@ class SecurityRegressionTests(TestCase):
         self.assertTrue(relayed["secure"])
         self.assertTrue(relayed["httponly"])
         self.assertEqual(relayed["samesite"], "Strict")
+
+    @patch("app.utils.req_gateway", side_effect=ValidationError("gateway down"))
+    def test_chatgpt_list_exposes_remark_for_display_names(self, _gateway):
+        account = ChatgptAccount.objects.create(
+            chatgpt_username="shared@example.com",
+            plan_type="plus",
+            access_token="secret-access",
+            access_token_valid=True,
+            remark="主力 Plus 号",
+            created_time=1,
+            updated_time=1,
+        )
+        car = ChatgptCar.objects.create(
+            car_name="display-name-car",
+            gpt_account_list=[account.id],
+            created_time=1,
+            updated_time=1,
+        )
+        user = User.objects.create_user(
+            username="display-name-user",
+            password="Strong-password-123!",
+            gptcar_list=[car.id],
+        )
+        request = self.factory.get("/0x/user/chatgpt-list")
+        force_authenticate(request, user=user)
+
+        response = UserChatGPTAccountList.as_view()(request)
+
+        self.assertEqual(response.status_code, 200)
+        row = response.data["results"][0]
+        self.assertEqual(row["remark"], "主力 Plus 号")
+        self.assertEqual(row["chatgpt_flag"], "{:03}sha".format(account.id))
 
     def test_admin_can_reset_upstream_login_count(self):
         admin = User.objects.create_superuser(
