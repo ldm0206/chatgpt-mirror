@@ -119,6 +119,10 @@ const router = createRouter({
   routes
 })
 
+const SIGN_IN_PAGES = ['/login', '/register']
+
+const homeRoute = (isAdmin: boolean) => (isAdmin ? '/account/overview' : '/login-chatgpt')
+
 // 路由守卫
 router.beforeEach(async (to, _from, next) => {
   const userStore = useUserStore()
@@ -131,6 +135,14 @@ router.beforeEach(async (to, _from, next) => {
   }
 
   const authenticated = await userStore.hydrate()
+
+  // 已登录时登录/注册页只会再要一次账号密码，送回各自的首页。
+  // logout=1 例外：登录页要靠它清掉服务端会话。
+  if (authenticated && SIGN_IN_PAGES.includes(to.path) && to.query.logout !== '1') {
+    next(homeRoute(userStore.isAdmin))
+    return
+  }
+
   if (authenticated && userStore.isAdmin && to.name === 'Profile') {
     next('/account/overview')
     return
