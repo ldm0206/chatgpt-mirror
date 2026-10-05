@@ -89,7 +89,7 @@ def oidc_settings():
         "display_name": "SSO",
         "redirect_uri": "",
         "auto_provision": True,
-        "auto_link_by_username": True,
+        "auto_link_by_username": False,
         "link_admins": False,
         "username_claim": "preferred_username",
     }
@@ -402,12 +402,27 @@ def derive_username(config, claims):
     return "oidc-" + hashlib.sha256(subject.encode("utf-8")).hexdigest()[:8]
 
 
+def _link_username_hint(config, claims):
+    """Claims an operator may treat as usernames when linking an existing account.
+
+    The email local-part is deliberately excluded: on a self-registration IdP it
+    is attacker-chosen, so linking on it would hand out existing local accounts.
+    """
+    candidates = [claims.get(config["username_claim"])]
+    if config["username_claim"] != "preferred_username":
+        candidates.append(claims.get("preferred_username"))
+    for candidate in candidates:
+        if isinstance(candidate, str):
+            cleaned = _clean_username(candidate)
+            if cleaned:
+                return cleaned
+    return ""
+
+
 def _match_user(username_hint):
-    user = User.objects.filter(username=username_hint).first()
-    if user:
-        return user
-    matches = list(User.objects.filter(username__iexact=username_hint)[:2])
-    return matches[0] if len(matches) == 1 else None
+    # Exact match only: a fuzzier match lets an IdP user claim a local account
+    # with a near-identical name.
+    return User.objects.filter(username=username_hint).first()
 
 
 def _unique_username(base):
@@ -451,8 +466,9 @@ def resolve_user(config, claims):
         return identity.user, identity
 
     username_hint = derive_username(config, claims)
-    if config["auto_link_by_username"] and username_hint:
-        user = _match_user(username_hint)
+    if config["auto_link_by_username"]:
+        link_hint = _link_username_hint(config, claims)
+        user = _match_user(link_hint) if link_hint else None
         if user is not None:
             if user.username == FREE_ACCOUNT_USERNAME:
                 raise OidcError("conflict")

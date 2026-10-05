@@ -40,7 +40,7 @@ OIDC_SCOPES = os.environ.get("OIDC_SCOPES", "openid profile email").strip()
 OIDC_DISPLAY_NAME = os.environ.get("OIDC_DISPLAY_NAME", "SSO").strip()
 OIDC_REDIRECT_URI = os.environ.get("OIDC_REDIRECT_URI", "").strip()
 OIDC_AUTO_PROVISION = os.environ.get("OIDC_AUTO_PROVISION", "true") == "true"
-OIDC_AUTO_LINK_USERNAME = os.environ.get("OIDC_AUTO_LINK_USERNAME", "true") == "true"
+OIDC_AUTO_LINK_USERNAME = os.environ.get("OIDC_AUTO_LINK_USERNAME", "false") == "true"
 OIDC_LINK_ADMINS = os.environ.get("OIDC_LINK_ADMINS", "false") == "true"
 OIDC_USERNAME_CLAIM = os.environ.get("OIDC_USERNAME_CLAIM", "preferred_username").strip()
 

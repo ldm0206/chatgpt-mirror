@@ -237,7 +237,7 @@
               自动开通新用户（首次登录自动创建，无上游账号，需管理员分号池）
             </t-checkbox>
             <t-checkbox v-model="oidcForm.oidc_auto_link_by_username">
-              按用户名自动绑定既有镜像用户
+              按用户名自动绑定既有镜像用户（IdP 允许自选用户名时有冒名接管风险，确认可信后再开启）
             </t-checkbox>
             <t-checkbox v-model="oidcForm.oidc_link_admins">
               允许自动绑定管理员账号（有接管超管风险，确认 IdP 可信后再开启）
@@ -310,7 +310,7 @@ const oidcForm = reactive({
   oidc_redirect_uri: '',
   oidc_username_claim: 'preferred_username',
   oidc_auto_provision: true,
-  oidc_auto_link_by_username: true,
+  oidc_auto_link_by_username: false,
   oidc_link_admins: false
 })
 const savingOidc = ref(false)

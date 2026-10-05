@@ -57,7 +57,9 @@ class SiteSettings(models.Model):
     oidc_display_name = models.CharField(max_length=32, default="SSO")
     oidc_redirect_uri = models.CharField(max_length=300, blank=True, default="")
     oidc_auto_provision = models.BooleanField(default=True)
-    oidc_auto_link_by_username = models.BooleanField(default=True)
+    # Off by default: on a self-registration IdP the username claim is attacker-chosen,
+    # so linking an existing local account by it is an account takeover.
+    oidc_auto_link_by_username = models.BooleanField(default=False)
     oidc_link_admins = models.BooleanField(default=False)
     oidc_username_claim = models.CharField(max_length=64, default="preferred_username")
     # 0 keeps the installation unlimited, which is the behaviour before these existed.

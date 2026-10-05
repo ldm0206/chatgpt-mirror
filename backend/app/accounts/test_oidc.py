@@ -288,6 +288,7 @@ class OidcUserResolutionTests(OidcTestCase):
 
     def test_links_existing_user_by_username_and_issues_session(self):
         user = User.objects.create_user(username="alice", password="test-password")
+        self.enable_oidc(oidc_auto_link_by_username=True)
         self.claims = {"preferred_username": "alice"}
 
         response = self.login_through_provider()
@@ -319,6 +320,7 @@ class OidcUserResolutionTests(OidcTestCase):
         User.objects.create_user(
             username=ADMIN_USERNAME, password="test-password", is_staff=True, is_superuser=True,
         )
+        self.enable_oidc(oidc_auto_link_by_username=True)
         self.claims = {"preferred_username": ADMIN_USERNAME}
 
         response = self.login_through_provider()
@@ -328,7 +330,7 @@ class OidcUserResolutionTests(OidcTestCase):
         self.assertFalse(Token.objects.exists())
 
     def test_privileged_account_links_when_admins_opt_in(self):
-        self.enable_oidc(oidc_link_admins=True)
+        self.enable_oidc(oidc_auto_link_by_username=True, oidc_link_admins=True)
         admin = User.objects.create_user(
             username=ADMIN_USERNAME, password="test-password", is_staff=True, is_superuser=True,
         )
@@ -341,6 +343,7 @@ class OidcUserResolutionTests(OidcTestCase):
 
     def test_shared_free_account_is_never_linked(self):
         User.objects.create_user(username=FREE_ACCOUNT_USERNAME, password="test-password")
+        self.enable_oidc(oidc_auto_link_by_username=True)
         self.claims = {"preferred_username": FREE_ACCOUNT_USERNAME}
 
         response = self.login_through_provider()
@@ -392,8 +395,40 @@ class OidcUserResolutionTests(OidcTestCase):
         self.assertNotEqual(identity.user, existing)
         self.assertEqual(identity.user.username, "alice-2")
 
+    def test_auto_link_is_off_by_default(self):
+        existing = User.objects.create_user(username="alice", password="test-password")
+        self.claims = {"preferred_username": "alice"}
+
+        response = self.login_through_provider()
+
+        self.assertEqual(response["Location"], "/admin/#/login-chatgpt")
+        identity = OidcIdentity.objects.get()
+        self.assertNotEqual(identity.user, existing)
+        self.assertEqual(identity.user.username, "alice-2")
+
+    def test_linking_ignores_the_email_local_part(self):
+        User.objects.create_user(username="alice", password="test-password")
+        self.enable_oidc(oidc_auto_link_by_username=True)
+        self.claims = {"email": "alice@example.com"}
+
+        self.login_through_provider()
+
+        identity = OidcIdentity.objects.get()
+        self.assertEqual(identity.user.username, "alice-2")
+
+    def test_linking_requires_an_exact_username_match(self):
+        User.objects.create_user(username="Alice", password="test-password")
+        self.enable_oidc(oidc_auto_link_by_username=True)
+        self.claims = {"preferred_username": "alice"}
+
+        self.login_through_provider()
+
+        identity = OidcIdentity.objects.get()
+        self.assertEqual(identity.user.username, "alice-2")
+
     def test_inactive_and_expired_accounts_are_refused_after_linking(self):
         user = User.objects.create_user(username="alice", password="test-password", is_active=False)
+        self.enable_oidc(oidc_auto_link_by_username=True)
         self.claims = {"preferred_username": "alice"}
         response = self.login_through_provider()
         self.assertIn("oidc_error=inactive", response["Location"])
@@ -409,6 +444,7 @@ class OidcUserResolutionTests(OidcTestCase):
 
     def test_second_login_rotates_the_old_token(self):
         user = User.objects.create_user(username="alice", password="test-password")
+        self.enable_oidc(oidc_auto_link_by_username=True)
         self.claims = {"preferred_username": "alice"}
         self.login_through_provider()
         first_token = Token.objects.get(user=user)
